@@ -837,6 +837,7 @@ stdout 只输出结果。日志、提示、进度、二维码一律输出到 std
 | `@cv-cat/catbus-assets-jd` | JD 验证码（JCAP）的 onnx 模型，约 81 MB。作为 `catbus-cli` 的普通依赖，精确钉版本 |
 | `@cv-cat/catbus-assets-ocr` | 验证码 OCR 模型：ddddocr 1.6.1 的检测模型 `common_det.onnx`、识别模型 `common_old.onnx` 和字符集，约 34 MB（B 站极验点选在用）。同样是精确钉版本的普通依赖 |
 
+- `catbus-cli` 另带一个独立 bin `catbus-crawler-workflow` → `dist/integrations/crawler-workflow/cli.js`，只用于采析绘的 CatBus 后端适配；它不进入 `catbus` 注册表，不改变第 4 节任何命令语义。说明见 [docs/crawler-workflow.md](docs/crawler-workflow.md)。
 - 拆出 assets-jd / assets-ocr 是因为模型很少变。放在主包里的话，每次发版都要上传 100 多 MB。
 - 两个包的源码在 `packages/assets-jd/`、`packages/assets-ocr/`，是 npm workspace，开发时直接链接。
 - 模型文件不进 git，由 `npm run assets:jd`（`scripts/fetch-jd-models.mjs`）按 `src/platforms/jd/UPSTREAM` 的 commit 取回并校验 sha256：有 `references/JdApis` 时从本地复制，否则从 GitHub 下载。打包 assets-jd 时会自动执行。
@@ -998,6 +999,7 @@ catbus/
 │   ├── examples/                   # 组合 catbus 的示例脚本
 │   ├── capabilities.md             # 能力矩阵（由注册表生成，不手改）
 │   ├── upstream-map.md             # 上游移植对照
+│   ├── crawler-workflow.md         # 采析绘 CatBus 后端适配说明
 │   └── trouble.md  roadmap.md      # 内部文档（真机验证记录、路线图）：只在本地，不进版本控制
 ├── .claude/skills/catbus/          # 受测的 Agent 技能：SKILL.md 总纲，platforms/、workflows/ 按需读；一致性由 tests/skill.test.ts 检查
 ├── .agents/skills/catbus/          # OpenCode 读取的技能副本：必须与 .claude 完全一致，由 tests/skill.test.ts 检查
@@ -1005,6 +1007,7 @@ catbus/
 ├── src/
 │   ├── cli/                        # 入口 main.ts、argv 解析、帮助、信封输出、确认
 │   ├── core/                       # registry、auth store、config、errors、http、schemas、signing(vm)、log
+│   ├── integrations/crawler-workflow/ # 采析绘适配器（独立 bin，不进入平台注册表）
 │   ├── platforms/_shared/          # 多个平台共用、但不属于 core 的实现，例如 impaas.ts（闲鱼、淘宝的钉钉 IMPaaS 私信长连）
 │   └── platforms/<p>/
 │       ├── index.ts                # 平台声明与命令注册

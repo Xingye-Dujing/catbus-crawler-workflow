@@ -28,7 +28,8 @@
   },
   "type": "module",
   "bin": {
-    "catbus": "dist/cli/main.js"
+    "catbus": "dist/cli/main.js",
+    "catbus-crawler-workflow": "dist/integrations/crawler-workflow/cli.js"
   },
   "files": [
     "dist",

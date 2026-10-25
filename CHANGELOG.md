@@ -6,7 +6,9 @@
 
 ## [Unreleased]
 
-（暂无）
+### Added
+
+- 新增独立 bin `catbus-crawler-workflow`，把 CatBus 作为采析绘（crawler_workflow）的显式后端：先适配 B站 `posts` / `author` / `hot`（仅 popular）/ `comments`，输出沿用现有表格列；提供 `capabilities` 支持矩阵和独立的 CatBus 登录态 `preflight`。它不进入 `catbus` 平台注册表，说明见 [docs/crawler-workflow.md](docs/crawler-workflow.md)
 
 ## [0.2.1] - 2026-10-22
 
