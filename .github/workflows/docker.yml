@@ -1,0 +1,43 @@
+name: docker
+
+# 构建 Docker 镜像并在镜像里跑 catbus version / doctor，确认镜像能用。只构建、不推送到任何镜像仓库。
+on:
+  push:
+    branches: [master]
+    paths: ['Dockerfile', '.dockerignore', 'compose.yaml', 'package.json', 'package-lock.json', 'packages/**', 'scripts/**', 'src/**', 'static/**', '.github/workflows/docker.yml']
+  pull_request:
+    paths: ['Dockerfile', '.dockerignore', 'compose.yaml', 'package.json', 'package-lock.json', 'packages/**', 'scripts/**', 'src/**', 'static/**', '.github/workflows/docker.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: build
+        run: docker build -t catbus:ci .
+      - name: version / doctor
+        run: |
+          docker run --rm catbus:ci version
+          docker run --rm catbus:ci doctor
+      - name: 登录态写进卷
+        run: |
+          docker volume create catbus-ci
+          docker run --rm -v catbus-ci:/data catbus:ci config set timeout 45
+          docker run --rm -v catbus-ci:/data catbus:ci config get timeout | grep -q '"data":45'
+      - name: 以当前用户运行，登录态放在挂进来的目录（Linux 上文件归自己所有）
+        run: |
+          mkdir -m 700 data work
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/data:/data" -v "$PWD/work:/work" catbus:ci doctor
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/data:/data" catbus:ci config set timeout 45
+          test "$(stat -c %u data/config.toml)" = "$(id -u)"
+      - name: compose 配置
+        run: docker compose config --quiet

@@ -1,0 +1,77 @@
+{
+  "name": "catbus-cli",
+  "version": "0.2.1",
+  "description": "catbus（猫巴士）：上车，开往任何平台。一个命令操作小红书、抖音、TikTok、B 站、快手、微博、闲鱼、淘宝、京东、X、12306。",
+  "keywords": [
+    "cli",
+    "xiaohongshu",
+    "douyin",
+    "tiktok",
+    "bilibili",
+    "kuaishou",
+    "weibo",
+    "xianyu",
+    "taobao",
+    "jd",
+    "twitter",
+    "12306"
+  ],
+  "author": "cv-cat",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cv-cat/catbus.git"
+  },
+  "homepage": "https://github.com/cv-cat/catbus#readme",
+  "bugs": {
+    "url": "https://github.com/cv-cat/catbus/issues"
+  },
+  "type": "module",
+  "bin": {
+    "catbus": "dist/cli/main.js"
+  },
+  "files": [
+    "dist",
+    "static",
+    "assets/banner.txt"
+  ],
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
+  "workspaces": [
+    "packages/assets-jd",
+    "packages/assets-ocr"
+  ],
+  "scripts": {
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:e2e": "vitest run -c tests/e2e/vitest.config.ts",
+    "gen:capabilities": "npm run build && node scripts/gen-capabilities.mjs",
+    "prepack": "npm run build",
+    "assets:jd": "node scripts/fetch-jd-models.mjs",
+    "assets:ocr": "node scripts/fetch-ocr-models.mjs"
+  },
+  "dependencies": {
+    "@cv-cat/catbus-assets-jd": "0.1.0",
+    "@cv-cat/catbus-assets-ocr": "0.1.0",
+    "@napi-rs/canvas": "^1.0.9",
+    "@techstark/opencv-js": "^5.0.0-release.1",
+    "crypto-js": "^4.2.0",
+    "jsdom": "^30.1.1",
+    "onnxruntime-web": "^1.30.0",
+    "protobufjs": "^8.8.0",
+    "qrcode": "^1.5.4",
+    "smol-toml": "^1.9.0",
+    "wreq-js": "^3.2.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/crypto-js": "^4.2.2",
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^22.20.4",
+    "@types/qrcode": "^1.5.6",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
+  }
+}

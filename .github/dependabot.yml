@@ -1,0 +1,30 @@
+version: 2
+updates:
+  # 根目录的 package-lock.json 同时锁定 npm workspace（packages/assets-jd、packages/assets-ocr）的依赖
+  - package-ecosystem: npm
+    directories:
+      - /
+      - /packages/*
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      dev-dependencies:
+        dependency-type: development
+    ignore:
+      # @types/node 的大版本跟着 engines 里最低的 Node 大版本走（现在是 22），不跟 Node 的最新版
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+    commit-message:
+      prefix: deps
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - '*'
+    commit-message:
+      prefix: ci

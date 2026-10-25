@@ -1,0 +1,24 @@
+# 构建上下文只需要打包用到的文件：package*.json、tsconfig、src、static、scripts、assets、packages
+.git
+.github
+.claude
+node_modules
+dist
+coverage
+*.tgz
+references
+.golden
+.e2e
+.build
+__pycache__
+*.pyc
+
+# 不进镜像的内容
+tests
+docs
+*.md
+!packages/*/README.md
+llms.txt
+compose.yaml
+Dockerfile
+.dockerignore

@@ -1,0 +1,28 @@
+references/
+node_modules/
+dist/
+coverage/
+*.tgz
+packages/assets-jd/models/
+packages/assets-ocr/models/
+.golden/
+.e2e/
+.build/
+__pycache__/
+*.pyc
+.DS_Store
+
+# 编辑器 / IDE 的本地配置
+.idea/
+.vscode/
+
+# .claude/ 下只有 Agent 技能进版本控制，其余是本机的工具设置
+.claude/*
+!.claude/skills/
+
+# 内部文档（真机验证记录、路线图），只在本地
+docs/trouble.md
+docs/roadmap.md
+
+# docker compose 的下载目录
+downloads/

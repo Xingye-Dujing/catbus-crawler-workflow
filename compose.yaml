@@ -1,0 +1,39 @@
+# 用 Docker Compose 运行 catbus：登录态保存在命名卷 catbus-data 里，下载的文件落在当前目录的 downloads/。
+#
+#   docker compose build
+#   docker compose run --rm catbus bilibili auth login          # 二维码画在终端里，也存到卷里的 cache/bilibili/qrcode.png
+#   docker compose run --rm catbus bilibili item search 猫 --limit 20
+#   docker compose run --rm catbus xhs item download "<笔记 URL>"   # 文件写到 ./downloads
+#   docker compose run --rm -T catbus weibo auth login --cookie - < weibo-cookie.txt   # cookie 从 stdin 读取
+#
+# 长时间监听直播弹幕，追加写到 ./downloads/live.jsonl（每行一个 Event）：
+#
+#   ROOM=<直播间> docker compose --profile listen up live-listen
+#   ROOM=<直播间> PLATFORM=douyin DURATION=2h docker compose --profile listen up live-listen
+#
+# 代理：catbus 不读取 HTTP(S)_PROXY，用 docker compose run --rm catbus config set proxy http://host.docker.internal:7890 写进卷里的 config.toml。
+
+x-catbus: &catbus
+  build: .
+  image: catbus:local
+  volumes:
+    - catbus-data:/data
+    - ./downloads:/work
+
+services:
+  catbus:
+    <<: *catbus
+    stdin_open: true
+    tty: true
+
+  live-listen:
+    <<: *catbus
+    profiles: [listen]
+    environment:
+      PLATFORM: ${PLATFORM:-bilibili}
+      ROOM: ${ROOM:-}
+      DURATION: ${DURATION:-1h}
+    entrypoint: ['sh', '-c', 'exec catbus "$$PLATFORM" live listen "$${ROOM:?请设置 ROOM=<直播间>}" --duration "$$DURATION" -q >> /work/live.jsonl']
+
+volumes:
+  catbus-data:

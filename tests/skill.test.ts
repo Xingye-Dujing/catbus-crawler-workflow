@@ -1,0 +1,119 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { describe, expect, it } from 'vitest'
+import type { Platform } from '../src/core/registry.js'
+import { PLATFORMS } from '../src/platforms/index.js'
+
+// .claude/skills/catbus 是给 AI Agent 的使用说明（AGENTS 7.7）。平台文件里「能做 / 做不到」是手写的摘要，
+// 这里对照注册表，防止注册表改了而技能没跟上。.agents/skills/catbus 是 OpenCode 读取的副本，必须与源一致。
+const SKILL = resolve(dirname(fileURLToPath(import.meta.url)), '../.claude/skills/catbus')
+const OPENCODE_SKILL = resolve(dirname(fileURLToPath(import.meta.url)), '../.agents/skills/catbus')
+const read = (rel: string) => readFileSync(join(SKILL, rel), 'utf8').replace(/\r\n/g, '\n')
+
+const RESOURCES = new Set(
+  PLATFORMS.flatMap((p) => [...web(p).commands.values()].map((c) => c.resource)),
+)
+
+function web(p: Platform) {
+  const ep = p.endpoints.web
+  if (ep === 'planned') throw new Error(`${p.id} 的 web 端是 planned`)
+  return ep
+}
+
+/**
+ * 从一段文字里取出提到的命令：`item search` 设定当前 resource，后面的 `get` 这类单词接在它后面。
+ * `coupon list <item>` 这样带占位参数的也算；带选项的（`feed list --kind hot`）只是提到某个取值，不算。
+ */
+function mentioned(text: string): Set<string> {
+  const out = new Set<string>()
+  let resource: string | null = null
+  for (const [, token] of text.matchAll(/`([^`]+)`/g)) {
+    const parts = token!.trim().split(/\s+/)
+    const placeholders = parts.slice(2).every((s) => /^[<[]/.test(s))
+    if (parts.length >= 2 && placeholders && RESOURCES.has(parts[0]!) && /^[a-z]+$/.test(parts[1]!)) {
+      resource = parts[0]!
+      out.add(`${parts[0]} ${parts[1]}`)
+    } else if (parts.length === 1 && /^[a-z]+$/.test(parts[0]!) && resource) {
+      out.add(`${resource} ${parts[0]}`)
+    }
+  }
+  return out
+}
+
+function section(md: string, title: string): string {
+  const m = md.match(new RegExp(`\\n## ${title}\\n([\\s\\S]*?)(?=\\n## )`))
+  if (!m) throw new Error(`缺少「## ${title}」`)
+  return m[1]!
+}
+
+describe('Agent 技能 .claude/skills/catbus', () => {
+  const skill = read('SKILL.md')
+
+  it('SKILL.md 的平台表列出了每个平台的 id、别名和平台文件', () => {
+    for (const p of PLATFORMS) {
+      const row = skill.split('\n').find((l) => l.startsWith('| ') && l.includes(`| \`${p.id}\` |`))
+      expect(row, p.id).toBeDefined()
+      for (const alias of p.aliases) expect(row, `${p.id} 的别名 ${alias}`).toContain(`\`${alias}\``)
+      expect(row).toContain(`platforms/${p.id}.md`)
+    }
+  })
+
+  it('description 提到了每个平台', () => {
+    const description = skill.match(/^description: (.+)$/m)?.[1] ?? ''
+    for (const p of PLATFORMS) expect(description, p.id).toContain(p.name)
+  })
+
+  it('平台文件与注册表一一对应', () => {
+    const files = readdirSync(join(SKILL, 'platforms')).map((f) => f.replace(/\.md$/, ''))
+    expect(files.sort()).toEqual(PLATFORMS.map((p) => p.id).sort())
+  })
+
+  for (const p of PLATFORMS) {
+    it(`platforms/${p.id}.md：「能做」恰好是已实现的命令，「做不到」里没有已实现的`, () => {
+      const md = read(`platforms/${p.id}.md`)
+      const implemented = new Set(
+        [...web(p).commands.values()]
+          .filter((c) => c.status === 'implemented' && c.resource !== 'auth')
+          .map((c) => `${c.resource} ${c.action}`),
+      )
+      const can = mentioned(section(md, '能做'))
+      expect([...can].filter((c) => !implemented.has(c)), '写进「能做」但没实现').toEqual([])
+      expect([...implemented].filter((c) => !can.has(c)), '已实现但「能做」里漏了').toEqual([])
+      const cannot = mentioned(section(md, '做不到'))
+      expect([...cannot].filter((c) => implemented.has(c)), '写进「做不到」但已实现').toEqual([])
+    })
+  }
+
+  it('技能里的相对链接都能打开', () => {
+    const broken: string[] = []
+    const walk = (dir: string): string[] =>
+      readdirSync(join(SKILL, dir), { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(dir, e.name)) : e.name.endsWith('.md') ? [join(dir, e.name)] : [],
+      )
+    for (const file of walk('.')) {
+      for (const [, target] of read(file).matchAll(/\]\(([^)#\s]+)(?:#[^)]*)?\)/g)) {
+        if (/^https?:/.test(target!)) continue
+        if (!existsSync(join(SKILL, dirname(file), target!))) broken.push(`${file} → ${target}`)
+      }
+    }
+    expect(broken).toEqual([])
+  })
+})
+
+describe('OpenCode 技能副本 .agents/skills/catbus', () => {
+  it('与 .claude/skills/catbus 的文件和内容完全一致', () => {
+    const list = (root: string, dir = ''): string[] =>
+      readdirSync(join(root, dir), { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? list(root, join(dir, e.name)) : [join(dir, e.name)],
+      )
+    const expected = list(SKILL).sort()
+    const actual = list(OPENCODE_SKILL).sort()
+    expect(actual, 'OpenCode 技能副本缺少或多出文件；改完 .claude 后复制到 .agents').toEqual(expected)
+    for (const file of expected) {
+      const claude = readFileSync(join(SKILL, file), 'utf8').replace(/\r\n/g, '\n')
+      const agents = readFileSync(join(OPENCODE_SKILL, file), 'utf8').replace(/\r\n/g, '\n')
+      expect(agents, `.agents 与 .claude 的 ${file} 不一致；改完 .claude 后复制到 .agents`).toBe(claude)
+    }
+  })
+})

@@ -1,0 +1,78 @@
+name: release
+
+# 推送 v* tag 发布。先跑完整 CI（含全部目标系统的冒烟），再发布 CI 里打好、测过的同一份 tarball，最后建 GitHub Release。
+# 发布顺序：@cv-cat/catbus-assets-jd、@cv-cat/catbus-assets-ocr（该版本还没发布时）→ catbus-cli（AGENTS 7.2）。
+# 每一步发布前都先查这个版本是否已经在 npm 上，失败后重跑这个 job 不会重复发布。
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  # 不用等 CI 跑完就能发现的问题，先查
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: tag 与版本号一致
+        run: |
+          version=$(node -p "require('./package.json').version")
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME 与 package.json 的 $version 不一致"; exit 1; }
+      - name: CHANGELOG 有这个版本
+        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME#v}" > /dev/null
+
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: [check, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # 建 GitHub Release
+      id-token: write   # npm trusted publishing（OIDC）与 provenance
+    env:
+      # 在 npm 上给三个包配好 trusted publishing 后，npm 优先用 OIDC，用不了才退回这个 token；
+      # 走 OIDC 成功发布过一次后，删掉这一行和仓库的 NPM_TOKEN secret。
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # npm 只给公开仓库生成 provenance：仓库公开时带 --provenance，私有时不带
+      PROVENANCE: ${{ !github.event.repository.private && '--provenance' || '' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # trusted publishing 需要 npm 11.5.1 以上
+      - run: npm install -g npm@latest
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+      - name: publish
+        run: |
+          # $1 是 package.json 所在目录；tarball 名与 npm pack 一致：@scope/name → scope-name-<版本>.tgz
+          publish() {
+            name=$(node -p "require('./$1/package.json').name")
+            version=$(node -p "require('./$1/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version 已发布，跳过"
+            else
+              npm publish "./$(echo "$name" | sed 's#^@##; s#/#-#')-$version.tgz" --access public $PROVENANCE
+            fi
+          }
+          publish packages/assets-jd
+          publish packages/assets-ocr
+          publish .
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME 已存在，跳过"
+          else
+            node scripts/release-notes.mjs "$version" > notes.md
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "catbus $version" --notes-file notes.md
+          fi
