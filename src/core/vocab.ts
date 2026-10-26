@@ -27,6 +27,12 @@ export interface CommandSpec {
   confirm?: boolean | ((options: Options) => boolean)
   /** 跨参数的约束，返回错误信息表示不通过（USAGE）。 */
   check?: (args: Args, options: Options) => string | undefined
+  /**
+   * 会不会改变平台上的状态。由 `write()` 机械设置，是「只读能力才进爬虫清单」的唯一判据：
+   * 一个写命令漏标，就会被采集器当作读命令暴露出去；所以测试同时从 `write(` 的源码清点核对，
+   * 不靠这份字段自己作证。
+   */
+  mutating?: boolean
 }
 
 const arg = {
@@ -50,7 +56,7 @@ function list(summary: string, args: ArgSpec[], output: string, extra: Extra = {
 }
 
 function write(summary: string, args: ArgSpec[], output = '{id}', extra: Extra = {}): CommandSpec {
-  return read(summary, args, output, { auth: 'required', ...extra })
+  return read(summary, args, output, { auth: 'required', mutating: true, ...extra })
 }
 
 function given(options: Options, keys: string[]): string[] {

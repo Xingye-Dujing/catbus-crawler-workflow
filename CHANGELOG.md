@@ -9,9 +9,14 @@
 ### Added
 
 - 新增独立 bin `catbus-crawler-workflow`，把 CatBus 作为采析绘（crawler_workflow）的显式后端：先适配 B站 `posts` / `author` / `hot`（仅 popular）/ `comments`，输出沿用现有表格列；提供 `capabilities` 支持矩阵和独立的 CatBus 登录态 `preflight`。它不进入 `catbus` 平台注册表，说明见 [docs/crawler-workflow.md](docs/crawler-workflow.md)
+- 采析绘适配器扩到全部只读读能力：微博 / 小红书 / 抖音 / X 的 posts / author / comments 用归一化输出映射（不再逐个平台解析 raw），快手、TikTok、京东、淘宝、闲鱼进入清单；注册表里已实现、只读、非流式的命令自动生成独有模式（`user.followers`、`keyword.hot`、`live.list`…），写命令由 `mutating` 机械排除，私信（`msg *`）按资源整体排除
+- 新增通用列常量（`columns.ts`）与归一化 / 通用处理器（`normalized.ts`、`generic.ts`）；`columnsFor`、身份列与参数都只在适配器里定义一次
 
 ### Changed
 
+- `manifest()` 改为从平台注册表生成独有模式；新增读命令不必再手工加一份清单。共享模式（posts/author/hot/comments）仍显式声明，保证与采析绘 Selenium 表同列
+- 抖音热榜仍标为不可用：上游 `feed list --kind hot` 是 `NOT_IMPLEMENTED`，没有用推荐流冒充
+- 平台 web 端的内联写命令（投币、一键三连、发弹幕/动态/专栏、删动态/草稿、X 发/删文章）补上 `mutating: true`
 - 采析绘适配器的 `run` 改为边产边写：`-o jsonl`（默认）每产出一行就写一行，后面失败或被停止都不撤回已经写出的行，摘要的 `rows` 是实际写出的行数而不是 0。原先等进程结束才一次性吐出，而采析绘是按行落库的，中途停止等于把已经抓到的每一条丢掉
 
 ## [0.2.1] - 2026-10-22

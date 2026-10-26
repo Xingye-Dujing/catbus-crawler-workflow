@@ -5,7 +5,9 @@ import { CatbusError, type ErrorCode } from '../../core/errors.js'
 import { jsonLoads } from '../../core/py.js'
 import { BilibiliAdapter } from './bilibili.js'
 import { errorCodeForExit } from './errors.js'
-import { CRAWLER_MODES, platformCapability } from './manifest.js'
+import { GenericAdapter } from './generic.js'
+import { CRAWLER_MODES, canonicalPlatform, manifest, platformCapability } from './manifest.js'
+import { NormalizedAdapter, PLATFORM_SPECS } from './normalized.js'
 import type {
   CatbusCall,
   CatbusEnvelope,
@@ -116,9 +118,7 @@ export class CatbusClient implements CatbusRunner {
 
 export function isCrawlerMode(value: string): value is CrawlerMode {
   return (CRAWLER_MODES as string[]).includes(value)
-}
-
-export interface PreflightResult {
+}export interface PreflightResult {
   ok: boolean
   backend: 'catbus'
   endpoint: 'web'
@@ -143,7 +143,7 @@ export async function preflight(
   const cap = platformCapability(platform)
   if (!cap) {
     throw new CatbusError('UNSUPPORTED', `CatBus 适配器不认识平台 ${platform}`, {
-      hint: '支持：bilibili、weibo、xiaohongshu、douyin、twitter',
+      hint: `支持的平台：${Object.keys(manifest().platforms).join('、')}`,
     })
   }
   const accountName = typeof account === 'string' ? account.trim() : ''
@@ -193,25 +193,50 @@ export async function runMode(
   const cap = platformCapability(platform)
   if (!cap) {
     throw new CatbusError('UNSUPPORTED', `CatBus 适配器不认识平台 ${platform}`, {
-      hint: '支持：bilibili、weibo、xiaohongshu、douyin、twitter（别名见 capabilities）',
+      hint: `支持的平台：${Object.keys(manifest().platforms).join('、')}`,
     })
   }
-  if (!isCrawlerMode(mode)) {
-    throw new CatbusError('USAGE', `不认识的采集模式 ${mode}`, { hint: 'posts / author / hot / comments' })
-  }
   const modeCap = cap.modes[mode]
+  if (!modeCap) {
+    throw new CatbusError('USAGE', `${cap.label} 没有 ${mode} 模式`, {
+      hint: '用 capabilities 查看这个平台 × 引擎有哪些模式',
+    })
+  }
   if (modeCap.status !== 'available' && modeCap.status !== 'partial') {
     throw new CatbusError('UNSUPPORTED', modeCap.reason ?? `${cap.label} 的 ${mode} 尚未适配 CatBus`, {
       hint: '用 capabilities 查看哪些 平台 × 模式 已经可用',
     })
   }
-  if (cap.catbus_platform !== 'bilibili') {
-    throw new CatbusError('UNSUPPORTED', modeCap.reason ?? `${cap.label} 的 ${mode} 尚未实现`, {
-      hint: '目前只完成 bilibili（B站）的适配',
-    })
-  }
   const account = typeof params.catbus_account === 'string' && params.catbus_account.trim()
     ? params.catbus_account.trim()
     : undefined
-  return new BilibiliAdapter(client, account, onRow).run(mode, params)
+
+  // B 站共享模式保留 raw 解析：投币/弹幕/合集这些字段不在归一化契约里。
+  if (cap.catbus_platform === 'bilibili' && modeCap.handler) {
+    return new BilibiliAdapter(client, account, onRow).run(mode, params)
+  }
+  // 微博/小红书/抖音/X/快手/TikTok 的共享模式走归一化输出。
+  const spec = PLATFORM_SPECS[canonicalPlatform(platform)]
+  if (modeCap.handler && spec) {
+    return new NormalizedAdapter(client, spec, account, onRow).run(mode, params)
+  }
+  // 其余都是 CatBus 独有的只读命令：命令、参数与列都来自清单，适配器只按输出类型映射。
+  if (modeCap.command) {
+    return new GenericAdapter(
+      client,
+      canonicalPlatform(platform),
+      cap.catbus_platform,
+      {
+        mode,
+        command: modeCap.command,
+        args: modeCap.args ?? [],
+        optional: modeCap.optional ?? {},
+        output: modeCap.output ?? '',
+        paged: Boolean(modeCap.paged),
+      },
+      account,
+      onRow,
+    ).run(mode, params)
+  }
+  throw new CatbusError('UNSUPPORTED', `${cap.label} 的 ${mode} 没有可用的处理器`)
 }

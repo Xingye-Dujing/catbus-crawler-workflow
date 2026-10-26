@@ -1,16 +1,33 @@
-import { CatbusError, type ErrorCode } from '../../core/errors.js'
-import { errorCodeForExit } from './errors.js'
+import { CatbusError } from '../../core/errors.js'
+import {
+  aggregateStatus,
+  asList,
+  asRecord,
+  asString,
+  callError,
+  classifyThrown,
+  commentStatusOf,
+  countOrBlank,
+  formatCst,
+  idOrEmpty,
+  intOrZero,
+  isRecord,
+  parseCommentLimit,
+  parseTarget,
+  parseUrls,
+  textOrEmpty,
+} from './common.js'
 import type {
   ArticleResult,
-  CatbusCall,
   CatbusRunner,
   CrawlerMode,
   Row,
   RowSink,
   RunParams,
   RunResult,
-  RunStatus,
 } from './types.js'
+
+export { formatCst }
 
 /** 采析绘 B 站视频表的列顺序；不能随手改，分析节点按这些键取值。 */
 export const BILIBILI_VIDEO_COLUMNS = [
@@ -51,64 +68,6 @@ export const BILIBILI_COMMENT_COLUMNS = [
   '回复数',
   'UP主态',
 ]
-
-const CST_OFFSET_MS = 8 * 60 * 60 * 1000
-
-/** 平台时间统一按北京时间渲染，和采析绘的 _stamp / comments_base._stamp 一致。 */
-export function formatCst(value: unknown): string {
-  if (value == null || value === '') return ''
-  const n = Number(value)
-  if (!Number.isFinite(n)) return ''
-  const seconds = Math.trunc(n)
-  if (seconds <= 0) return ''
-  const d = new Date(seconds * 1000 + CST_OFFSET_MS)
-  if (!Number.isFinite(d.getTime())) return ''
-  return d.toISOString().slice(0, 19).replace('T', ' ')
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {}
-}
-
-function asList(value: unknown, what: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new CatbusError('UPSTREAM', `${what} 返回的不是数组`, { detail: value })
-  }
-  return value
-}
-
-function asString(value: unknown): string {
-  return value == null ? '' : String(value).trim()
-}
-
-/** 评论表沿用 Python 的 str(value or '')，不做 trim；正文里的换行和缩进要保留。 */
-function textOrEmpty(value: unknown): string {
-  return value ? String(value) : ''
-}
-
-/** Python 里 0 是假值；评论的 root / parent 为 0 时要落成空串，不能写成 "0"。 */
-function idOrEmpty(value: unknown): string {
-  const text = asString(value)
-  return text === '0' ? '' : text
-}
-
-/** 缺失就是空，不能把「接口没给」写成 0；真实 0 仍然写 0。 */
-function countOrBlank(value: unknown): number | '' {
-  if (value == null || value === '') return ''
-  const n = Number(value)
-  return Number.isFinite(n) ? Math.trunc(n) : ''
-}
-
-/** 采析绘原来的 _as_int 把缺失写成 0；评论等级、回复数沿用这个语义。 */
-function intOrZero(value: unknown): number {
-  if (value == null || value === '') return 0
-  const n = Number(value)
-  return Number.isFinite(n) ? Math.trunc(n) : 0
-}
 
 /** 视频详情（x/web-interface/view 的 data）→ 采析绘的 18 列。 */
 export function mapBilibiliVideo(raw: unknown): Row {
@@ -214,86 +173,6 @@ export function mapBilibiliCommentThread(raws: unknown, articleUrl: string, limi
     if (stopped) break
   }
   return rows
-}
-
-/** CatBus 的错误码和采析绘的 OK / BLOCKED / DEAD 不是一一对应，这里显式收敛。 */
-export function commentStatusOf(err: CatbusError): RunStatus {
-  if (err.code === 'AUTH_REQUIRED' || err.code === 'AUTH_EXPIRED' || err.code === 'RISK_CONTROL') return 'blocked'
-  if (err.code === 'NETWORK') return 'error'
-  if (err.code === 'UPSTREAM') {
-    const detail = err.detail as { code?: unknown; message?: unknown } | null
-    const code = asString(detail?.code)
-    const message = `${err.message} ${asString(detail?.message)}`
-    if (code === '-404' || /404|啥都木有|not\s*found/i.test(message)) return 'dead'
-    return 'blocked'
-  }
-  return 'error'
-}
-
-function callError(call: CatbusCall): CatbusError {
-  const e = call.envelope?.error
-  if (e) {
-    return new CatbusError(e.code as ErrorCode, e.message, {
-      hint: e.hint,
-      detail: e.detail,
-    })
-  }
-  if (call.code !== 0) {
-    return new CatbusError(
-      errorCodeForExit(call.code),
-      `catbus 退出码 ${call.code}${call.stderr ? `：${call.stderr.trim()}` : ''}`,
-    )
-  }
-  return new CatbusError('UPSTREAM', 'catbus 没有返回 JSON 信封')
-}
-
-function classifyThrown(err: unknown): CatbusError {
-  return err instanceof CatbusError ? err : new CatbusError('ERROR', err instanceof Error ? err.message : String(err))
-}
-
-function parseUrls(value: unknown): string[] {
-  const list = Array.isArray(value) ? value : [value]
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const part of list) {
-    for (const line of String(part ?? '').split(/\r?\n/)) {
-      const url = line.trim()
-      if (!url || seen.has(url)) continue
-      seen.add(url)
-      out.push(url)
-    }
-  }
-  return out
-}
-
-function parseTarget(value: unknown, key: string): number {
-  if (value == null || value === '') return 50
-  const n = Number(value)
-  if (!Number.isSafeInteger(n) || n < 1) {
-    throw new CatbusError('USAGE', `${key} 必须是正整数`, { hint: '例如 --params "{\"target_count\":50}"' })
-  }
-  return n
-}
-
-function parseCommentLimit(value: unknown): number {
-  if (value == null || value === '') return 0
-  const n = Number(value)
-  if (!Number.isSafeInteger(n) || n < 0) {
-    throw new CatbusError('USAGE', 'comment_limit 必须是非负整数', { hint: '0 表示取完全部评论' })
-  }
-  return n
-}
-
-function aggregateStatus(articles: ArticleResult[]): RunStatus {
-  if (articles.length === 0) return 'error'
-  const statuses = articles.map((a) => a.status)
-  if (statuses.every((s) => s === 'ok')) return 'ok'
-  if (statuses.some((s) => s === 'ok')) return 'partial'
-  if (statuses.every((s) => s === 'blocked')) return 'blocked'
-  if (statuses.every((s) => s === 'dead')) return 'dead'
-  if (statuses.includes('blocked')) return 'blocked'
-  if (statuses.includes('dead')) return 'dead'
-  return 'error'
 }
 
 /**

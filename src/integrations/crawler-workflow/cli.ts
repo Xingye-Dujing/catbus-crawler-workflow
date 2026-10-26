@@ -31,14 +31,13 @@ const HELP = `catbus-crawler-workflow — 采析绘的 CatBus 后端适配器
   CatBus 使用自己的账号：catbus bilibili auth login；和 Selenium cookie 不共用。
 
 模式:
-  posts     关键词搜索（B站已适配）
-  author    作者投稿（B站已适配）
-  hot       热门榜（B站 popular 已适配，ranking 未适配）
-  comments  文章评论（B站已适配）
+  共享模式（与采析绘 Selenium 版同名）: posts / author / hot / comments
+  CatBus 独有只读模式由 capabilities 按平台列出（user.followers、keyword.hot、live.list …）
+  写操作不在清单里，run 也不会执行它们。
 
 选项:
-  --platform <id>        bilibili / weibo / xiaohongshu / douyin / twitter（也接受 CatBus 别名）
-  --mode <mode>          posts / author / hot / comments
+  --platform <id>        capabilities 里列出的采析绘平台 id（也接受 CatBus 别名）
+  --mode <mode>          capabilities 里该平台列出的模式
   --params <json|@file|-> 采析绘节点参数；和下面的快捷选项可混用
   --url <链接>            comments 模式可重复
   --keyword <词>          posts 模式

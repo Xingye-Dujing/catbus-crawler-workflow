@@ -93,6 +93,7 @@ export default definePlatform({
           upstream: 'full',
           summary: '发文章（Premium 长文）：建草稿，写标题、正文、封面，再发布',
           args: [],
+          mutating: true,
           options: {
             title: z.string().optional().describe('标题，不给时取正文第一行的 # 标题'),
             text: z.string().describe('正文（Markdown），@file 表示从文件读取；独占一行的 ![](图片) 会上传成插图，相对路径按该文件所在目录解析'),
@@ -106,6 +107,7 @@ export default definePlatform({
           upstream: 'full',
           summary: '删文章（草稿或已发布的）',
           args: [{ name: 'article', summary: '文章：ID 或 URL' }],
+          mutating: true,
           auth: 'required',
           confirm: true,
           output: '{id}',

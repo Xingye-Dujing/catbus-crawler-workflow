@@ -1,10 +1,18 @@
 import type { CatbusError } from '../../core/errors.js'
 
-/** 采析绘的四种采集模式；与 crawl_capabilities.py 的 mode key 一致。 */
-export type CrawlerMode = 'posts' | 'author' | 'hot' | 'comments'
+/**
+ * 采析绘的四种共享采集模式：posts / author / hot / comments。
+ *
+ * 清单里还会出现 CatBus 独有的只读模式（``user.followers`` 等），所以模式键是字符串；
+ * 这四种只是「和 Selenium 版同名、同一个执行入口」的那一小批。
+ */
+export type CrawlerMode = string
+
+/** 与 Selenium 版同名、走同一套处理器的模式。 */
+export const SHARED_MODES = ['posts', 'author', 'hot', 'comments'] as const
 
 /** 与 CatBus 有交集的采析绘平台 id；CatBus 的规范 id 由 platformCapability 映射过去。 */
-export type CrawlerPlatform = 'bilibili' | 'weibo' | 'xiaohongshu' | 'douyin' | 'twitter'
+export type CrawlerPlatform = string
 
 export type ModeStatus = 'available' | 'partial' | 'planned' | 'unavailable'
 
@@ -61,11 +69,21 @@ export interface RunResult {
 
 export interface ModeCapability {
   status: ModeStatus
-  /** 已经实现的 handler 名称；没有实现时为空。 */
+  /** 已经实现的处理器名称；CatBus 独有模式为空。 */
   handler?: 'posts' | 'author' | 'hot' | 'comments'
+  /** CatBus 命令路径（``user followers``）；共享模式也写，便于 UI 与文档展示。 */
+  command?: string
+  /** 命令的位置参数，按参数名列出；适配器按它把采析绘字段拼成 argv。 */
+  args?: string[]
+  /** 可省略的位置参数与省略时的取值（命令声明里的 ArgSpec.default）。 */
+  optional?: Record<string, string>
+  /** 命令是否分页（分页命令接受 --limit <target_count>）。 */
+  paged?: boolean
+  /** 输出的归一化类型（Item / User / Comment / Keyword / Topic / Live / …）。 */
+  output?: string
   /** CatBus 命令，按 argv 拆开，便于以后在 UI 里展示。 */
   catbus: string[]
-  /** 采析绘 wildcard 节点里可直接透传的字段。 */
+  /** 采析绘节点里可直接透传的字段。 */
   params: string[]
   /** 输出列，顺序与 CSV 表头一致。 */
   columns: string[]
@@ -92,7 +110,7 @@ export interface BackendManifest {
   label: 'CatBus'
   endpoint: 'web'
   /** 与 CatBus 有交集的采析绘平台 id -> 能力；没有交集的平台不出现在这里。 */
-  platforms: Record<CrawlerPlatform, PlatformCapability>
+  platforms: Record<string, PlatformCapability>
   requirements: {
     node: string
     catbus: string
@@ -119,6 +137,15 @@ export interface RunParams {
   comment_limit?: number | string
   /** hot 榜单固定为 popular；ranking 暂未适配。 */
   board?: string
+  /** CatBus 独有模式的输入：用户 / 直播间 / 收藏夹 / 合集 / 会话 / 搜索前缀 / 商品 / 评论。 */
+  user?: string
+  room?: string
+  folder?: string
+  series?: string
+  conversation?: string
+  prefix?: string
+  product?: string
+  comment_id?: string
   /** 采析绘的账号名（Selenium 侧）；适配器不消费，绝不拿它去匹配 CatBus 账号。 */
   account?: string
   /** CatBus 自己的账号名；不传时用 CatBus 的当前账号。 */

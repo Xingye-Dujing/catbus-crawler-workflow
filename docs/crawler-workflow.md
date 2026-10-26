@@ -17,14 +17,26 @@
 | 平台 | posts | author | hot | comments |
 |---|---|---|---|---|
 | B站 | CatBus 可用 | CatBus 可用 | CatBus 部分（只有热门 popular） | CatBus 可用 |
-| 微博 | 规划中 | 规划中 | 不可用：CatBus 没有热榜命令 | 规划中 |
-| 小红书 | 规划中 | 不适用 | 不适用 | 规划中 |
-| 抖音 | 不适用 | 规划中 | 规划中 | 规划中 |
-| X | 规划中 | 规划中 | 不适用 | 规划中 |
+| 微博 | CatBus 部分（只有第一页） | CatBus 可用 | 不可用：CatBus 没有热榜命令 | CatBus 部分（只有一级评论） |
+| 小红书 | CatBus 可用 | CatBus 可用（引擎独有） | 不可用：没有榜单 | CatBus 可用（根评论 + 子回复） |
+| 抖音 | CatBus 可用（引擎独有） | CatBus 可用 | 不可用：上游 `feed list --kind hot` 是 `NOT_IMPLEMENTED` | CatBus 可用（根评论 + 子回复） |
+| X | CatBus 可用 | CatBus 可用 | 不可用：feed list 只有推荐流 | CatBus 可用（不展开楼中楼） |
+| 快手 | CatBus 部分（搜索无筛选） | CatBus 可用 | 不可用：feed list 是推荐流 | CatBus 部分（子回复只核对过一组参数） |
+| TikTok | CatBus 可用 | CatBus 可用 | 不可用：feed list 是推荐流 | CatBus 可用 |
+| 京东 / 淘宝 / 闲鱼 | 无共享模式 | 无共享模式 | 无共享模式 | 无共享模式 |
 
-“不适用”是采析绘本身没有这个模式；“不可用”是 CatBus 没有对应能力；“规划中”是 CatBus 有能力但列映射还没做。任何非 `available` 的组合都必须由上层展示 `reason`，不能让用户选中后才发现。
+“不可用”是 CatBus 没有对应能力；“部分”是上游只支持一部分，原因写在清单的 `reason` 里；任何非 `available` 的组合都必须由上层展示原因，不能让用户选中后才发现。京东 / 淘宝 / 闲鱼的“商品”不是帖子，不套用 posts/author/hot/comments 语义，只用下面生成的独有模式（如 `item.search`、`comment.list`、`product.get`）。
 
 B站 hot 的 `ranking` 榜没有注册进 CatBus。适配器收到 `board=ranking` 会报 `UNSUPPORTED`，不会悄悄改成 `popular`。
+
+### CatBus 独有只读模式
+
+注册表里**已实现、只读、非流式、输出是表格类型**的命令会自动变成一条模式（`user followers` → `user.followers`），`capabilities` 里带命令路径、位置参数、输出类型、通用列与身份列。覆盖粉丝/关注/点赞/收藏列表、用户搜索与资料、作品详情/相关推荐/媒体地址、热搜词与联想词、推荐流分类、收藏夹/合集/浏览历史、话题/地点搜索、直播间/礼物/排行榜、通知等。
+
+- **写操作一律不进**：`write()` 声明的命令带 `mutating: true`，生成时机械排除；测试同时从 `vocab.ts` 源码清点核对，防止绕过 `write()` 声明一个会改平台状态的命令。
+- **私信不出现**（`msg *`）：这是用户的私人通信，不是采析绘要采集的内容。
+- 通用模式的列按输出类型定义在 `columns.ts`（`ITEM_COLUMNS` / `USER_COLUMNS` / `KEYWORD_COLUMNS` …），同一类型跨平台同列，不另造方言。
+- 参数名沿用采析绘已有字段：`author` 填用户，`urls` 填作品链接，`keyword` 填关键词；`room` / `folder` / `series` / `conversation` / `product` / `comment_id` 是独有模式的新字段。省略 `user` 的命令（如 `folder list`）用命令自己的默认值 `me`。
 
 ## 3. 运行
 
@@ -100,19 +112,32 @@ CatBus 的归一化 `Item.stats` 只有播放/点赞/评论/收藏/转发，投�
 - 时间按北京时间 `YYYY-MM-DD HH:MM:SS` 渲染，和采析绘的 `_stamp` 一致。
 - 用户等级取 `member.level_info.current_level`；UP主态先看 `card_label` 里有没有“UP主”标记，再看 `up_action.like`。
 
-## 5. 后续接入采析绘（等那边空闲时再做）
+### 其他平台的共享模式列
 
-适配器故意停在子进程 + JSONL 边界，采析绘只需要加一个很薄的 runner：
+微博 / 小红书 / 抖音 / X / 快手 / TikTok 的共享模式**不用 `--raw`**：CatBus 已经把结果归一化成 `Item` / `Comment`，适配器只把归一化字段摆进采析绘同平台的列（`columns.ts`）：
 
-1. 在节点参数和 `/api/capabilities` 里增加“采集方式”（`selenium` / `catbus`），默认 `selenium`；`平台 × 模式` 的 CatBus 可用性来自 `catbus-crawler-workflow capabilities`。
-2. 新增 `CatbusRunner`：按节点参数拼 `run` 命令，读 stdout JSONL 作为行，读 stderr 摘要更新每篇状态；写操作仍然不经过 CatBus。
-3. 把 `backend` 写进节点指纹、去重账本和 cursor。切换后端时清掉或隔离对应账本，否则会拿 Selenium 的行去挡 CatBus 的行。
+- 微博：`发布者, 发布时间, 发布来源, 正文, 转发数, 评论数, 点赞数, 图片链接, 图片数, 话题, 视频数, 用户链接, 链接, 微博ID`；发布来源不在归一化输出里，留空。
+- 小红书：`笔记链接, 笔记ID, 标题, 作者, 点赞数, 正文, 发布时间, 收藏数, 评论数, 评论列表`；搜索卡片没有正文与评论预览，留空。
+- 抖音：`标题, 正文, 作者, 粉丝数, 获赞数, 发布时间, 视频ID, 点赞数, 评论数, 收藏数, 转发数, 链接`；单条粉丝数/获赞数接口没给，留空。
+- X：与 Selenium 版同列；引用/卡片/投票标记不在归一化输出里，留空。
+- 快手 / TikTok：没有 Selenium 表，用通用作品/评论列（`ITEM_COLUMNS` / `COMMENT_COLUMNS`）。
+- 评论的 `评论ID` / `父评论ID` 取自归一化输出；小红书、抖音、快手、TikTok 会按父评论再问一次 `comment replies` 展开一层子回复，楼层连续，父评论 ID 是根评论 ID。微博只取一级评论，X 不展开楼中楼（上游没有对应命令）。
+
+## 5. 采析绘侧的三维模型
+
+适配器停在子进程 + JSONL 边界。采析绘按 **平台 × 引擎 × 功能** 组织：
+
+1. 节点参数有 `backend`（`selenium` / `catbus`），进指纹、去重账本和 cursor；两个引擎不共用账本。
+2. 面板先选平台，再选引擎，功能列表随引擎变：Selenium 列出自己的模式，CatBus 列出 `capabilities` 里该平台的模式。不可运行的仍**列出 + 置灰 + 写明原因**，绝不静默换成另一个模式。
+3. CatBus 独有模式（`user.followers` 等）走同一条 `run` 子进程边界，参数通过 stdin 传给适配器；写命令不在清单里，面板也没有入口。
 4. CatBus 账号和 Selenium 账号分开配置；CatBus 登录态失效时只提示 `catbus ... auth login`，不尝试拿 Selenium cookie 去补。
 5. 服务器 / Docker 可以固定 CatBus 版本；Windows 桌面安装包默认不打包，避免把 Node 运行时和 100MB 级模型塞进安装包。
 
 ## 6. 已知限制
 
-- 目前只完成 B站四个模式；有交集的其他平台在清单里明确标为规划中/不可用；知乎、微信、红果短剧、YouTube 与 CatBus 没有交集，不出现在清单里。
+- 共享模式覆盖 B站、微博、小红书、抖音、X、快手、TikTok 的 28 个格子，其中 12 个曾经是“规划中”；抖音热榜按上游事实仍是不可用（`feed list --kind hot` 是 `NOT_IMPLEMENTED`），没有冒充。京东 / 淘宝 / 闲鱼只提供注册表里真实实现的读命令；知乎、微信、红果短剧、YouTube 与 CatBus 没有交集，不出现在清单里。
+- 微博搜索只有第一页、微博评论只有一级；快手搜索没有筛选；快手子回复只核对过一组抓包参数——都写进清单的 `reason`，由上层展示。
+- CatBus 独有模式按输出类型映射成通用列；它们不是 Selenium 表的替代，同一平台的两套模式喂给分析节点时列名不同是事实，不是错误。
 - B站 hot 只支持 popular；ranking 未接入 CatBus。
 - 微博没有 CatBus 热榜；微博搜索只有第一页；微博评论只有一级。
 - 适配器不维护 CatBus 侧的 cursor。一次 `run` 会尽量取到目标条数，详情失败记在 `warnings` / `status` 里；采析绘的去重账本负责跨运行去重，断点续传仍以采析绘自己的 cursor 为准。
