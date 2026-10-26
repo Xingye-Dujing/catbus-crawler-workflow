@@ -59,7 +59,7 @@ node dist/integrations/crawler-workflow/cli.js run \
 
 ## 4. 输出契约
 
-stdout 每行一条采析绘表格行；`-o json` 时是一个数组。stderr 最后一行是摘要：
+stdout 每行一条采析绘表格行；`-o json` 时是一个数组。默认的 jsonl **产出一条就写一条**：采析绘把每行写成一个事务，中途 停止 或后面失败都不会丢掉已经落地的行。stderr 最后一行是摘要：
 
 ```json
 {
@@ -82,6 +82,7 @@ stdout 每行一条采析绘表格行；`-o json` 时是一个数组。stderr �
 - `status`：`ok` / `partial` / `blocked` / `dead` / `error`。`partial` 表示有行但部分链接或详情失败。
 - `articles` 逐篇报告评论状态，供采析绘复用 `ok` / `blocked` / `dead` 的既有语义。
 - 退出码沿用 CatBus：1 未分类，2 用法/不支持，3 登录，4 未实现，5 风控，6 网络，7 上游错误。`partial` 返回 0，由摘要里的 `warnings` / `articles` 决定是否提示用户。
+- 失败时摘要的 `rows` 是**实际已经写出的行数**，不是 0：jsonl 下 stdout 已经交出的行不撤回（采析绘按行记账，这些行是真数据）；`-o json` 因为格式本身是一个数组，失败时不写出数组，只有 stderr 的摘要。
 - `--provenance` 会在每行末尾追加 `采集方式=catbus`。默认不加，保证和现有列契约一致。
 
 ### B站视频列

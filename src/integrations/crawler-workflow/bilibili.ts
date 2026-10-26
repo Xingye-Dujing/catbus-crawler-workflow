@@ -6,6 +6,7 @@ import type {
   CatbusRunner,
   CrawlerMode,
   Row,
+  RowSink,
   RunParams,
   RunResult,
   RunStatus,
@@ -305,8 +306,18 @@ export class BilibiliAdapter {
   constructor(
     private readonly client: CatbusRunner,
     account?: string,
+    private readonly onRow?: RowSink,
   ) {
     this.account = account?.trim() || undefined
+  }
+
+  /**
+   * 行既进本次结果数组（摘要要数它），也马上交给调用方，不等到整批跑完。
+   * 一条详情失败不撤回前面已经交出去的行——采析绘把它们一行一个事务存下了。
+   */
+  private async emit(rows: Row[], row: Row): Promise<void> {
+    rows.push(row)
+    await this.onRow?.(row)
   }
 
   private async call(args: string[]): Promise<unknown> {
@@ -351,7 +362,7 @@ export class BilibiliAdapter {
       try {
         const data = await this.call(['comment', 'list', url, ...(limit > 0 ? ['--limit', String(limit)] : ['--all'])])
         const mapped = mapBilibiliCommentThread(asList(data, 'comment list'), url, limit)
-        rows.push(...mapped)
+        for (const row of mapped) await this.emit(rows, row)
         articles.push({ url, status: 'ok', rows: mapped.length, error: null })
       } catch (err) {
         const e = classifyThrown(err)
@@ -403,7 +414,7 @@ export class BilibiliAdapter {
       const bvid = asString(asRecord(raw).bvid)
       if (!bvid || seen.has(bvid)) continue
       seen.add(bvid)
-      rows.push(mapBilibiliVideo(raw))
+      await this.emit(rows, mapBilibiliVideo(raw))
       if (rows.length >= target) break
     }
     return { rows, status: 'ok', warnings: [], articles: [] }
@@ -424,7 +435,7 @@ export class BilibiliAdapter {
       if (!bvid || seen.has(bvid)) continue
       seen.add(bvid)
       try {
-        rows.push(mapBilibiliVideo(await this.detail(bvid)))
+        await this.emit(rows, mapBilibiliVideo(await this.detail(bvid)))
       } catch (err) {
         const e = classifyThrown(err)
         if (e.code === 'AUTH_REQUIRED' || e.code === 'AUTH_EXPIRED' || e.code === 'RISK_CONTROL') {

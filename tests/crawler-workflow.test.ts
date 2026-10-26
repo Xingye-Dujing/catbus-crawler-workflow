@@ -7,6 +7,7 @@ import {
   mapBilibiliCommentThread,
   mapBilibiliVideo,
 } from '../src/integrations/crawler-workflow/bilibili.js'
+import { createRowWriter } from '../src/integrations/crawler-workflow/cli.js'
 import { manifest, platformCapability } from '../src/integrations/crawler-workflow/manifest.js'
 import { preflight, runMode } from '../src/integrations/crawler-workflow/runner.js'
 import type { CatbusCall, CatbusRunner } from '../src/integrations/crawler-workflow/types.js'
@@ -344,6 +345,79 @@ describe('采析绘 CatBus 适配器', () => {
     expect(result.rows[0]!.BV号).toBe('BV2')
     expect(result.status).toBe('partial')
     expect(result.warnings[0]).toContain('BV1')
+  })
+
+  it('逐条详情：第一条在第二条请求发出前就交给调用方', async () => {
+    const events: string[] = []
+    const client = fakeClient((args) => {
+      if (args.includes('search')) {
+        events.push('search')
+        return ok([{ bvid: 'BV1' }, { bvid: 'BV2' }], args)
+      }
+      events.push(`get ${args[3]}`)
+      return ok({ ...VIDEO, bvid: args[3] }, args)
+    })
+    await runMode('bilibili', 'posts', { keyword: '测试', target_count: 2 }, client, (row) => {
+      events.push(`row ${row.BV号}`)
+    })
+    expect(events).toEqual(['search', 'get BV1', 'row BV1', 'get BV2', 'row BV2'])
+  })
+
+  it('评论按链接交接：上一条的行在下一条请求发出前全部交出', async () => {
+    const events: string[] = []
+    const client = fakeClient((args) => {
+      events.push(`call ${args[3]}`)
+      return ok([ROOT], args)
+    })
+    await runMode(
+      'bilibili',
+      'comments',
+      { urls: ['https://www.bilibili.com/video/BV1', 'https://www.bilibili.com/video/BV2'] },
+      client,
+      (row) => {
+        events.push(`row ${row.文章URL}`)
+      },
+    )
+    expect(events).toEqual([
+      'call https://www.bilibili.com/video/BV1',
+      'row https://www.bilibili.com/video/BV1',
+      'row https://www.bilibili.com/video/BV1',
+      'call https://www.bilibili.com/video/BV2',
+      'row https://www.bilibili.com/video/BV2',
+      'row https://www.bilibili.com/video/BV2',
+    ])
+  })
+
+  it('jsonl 一行一写、json 缓冲到结束，写出的行数供失败摘要引用', async () => {
+    const lines: string[] = []
+    const jsonl = createRowWriter({
+      output: 'jsonl',
+      provenance: true,
+      write: (line) => {
+        lines.push(line)
+      },
+    })
+    await jsonl.onRow({ 标题: '甲' })
+    expect(lines).toEqual([`{"标题":"甲","采集方式":"catbus"}\n`])
+    expect(jsonl.written).toBe(1)
+    await jsonl.onRow({ 标题: '乙' })
+    await jsonl.finish()
+    // finish 只在 json 格式下补写整个数组；jsonl 已经在过程中写完。
+    expect(lines).toHaveLength(2)
+
+    const buffered: string[] = []
+    const json = createRowWriter({
+      output: 'json',
+      provenance: false,
+      write: (line) => {
+        buffered.push(line)
+      },
+    })
+    await json.onRow({ 标题: '甲' })
+    expect(buffered).toEqual([])
+    expect(json.written).toBe(1)
+    await json.finish()
+    expect(JSON.parse(buffered.join(''))).toEqual([{ 标题: '甲' }])
   })
 
   it('CatbusError 的 exitCode 保持 CatBus 的退出码约定', () => {

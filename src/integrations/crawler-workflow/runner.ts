@@ -11,6 +11,7 @@ import type {
   CatbusEnvelope,
   CatbusRunner,
   CrawlerMode,
+  RowSink,
   RunParams,
   RunResult,
 } from './types.js'
@@ -187,6 +188,7 @@ export async function runMode(
   mode: string,
   params: RunParams,
   client: CatbusRunner,
+  onRow?: RowSink,
 ): Promise<RunResult> {
   const cap = platformCapability(platform)
   if (!cap) {
@@ -211,5 +213,5 @@ export async function runMode(
   const account = typeof params.catbus_account === 'string' && params.catbus_account.trim()
     ? params.catbus_account.trim()
     : undefined
-  return new BilibiliAdapter(client, account).run(mode, params)
+  return new BilibiliAdapter(client, account, onRow).run(mode, params)
 }

@@ -13,6 +13,14 @@ export type RunStatus = 'ok' | 'partial' | 'blocked' | 'dead' | 'error'
 /** 一行采析绘表格。键的顺序就是 CSV 列的顺序。 */
 export type Row = Record<string, string | number | boolean | null>
 
+/**
+ * 逐行回调：一行产出来就交出去，不等到进程结束。
+ *
+ * 采析绘把每行写进它自己的账本（一行一个事务），所以「批次结束才给数据」意味着
+ * 中途 停止 会丢掉已经抓到的每一条。回调允许是异步的，写管道时用它压住背压。
+ */
+export type RowSink = (row: Row) => void | Promise<void>
+
 export interface CatbusEnvelope {
   ok: boolean
   platform?: string | null

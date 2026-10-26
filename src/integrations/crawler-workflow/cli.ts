@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { once } from 'node:events'
 import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
@@ -9,7 +10,7 @@ import { CatbusError, toCatbusError } from '../../core/errors.js'
 import { jsonLoads } from '../../core/py.js'
 import { platformCapability } from './manifest.js'
 import { CatbusClient, preflight, runMode } from './runner.js'
-import type { RunParams, RunResult, Row } from './types.js'
+import type { Row, RowSink, RunParams, RunResult } from './types.js'
 
 const HELP = `catbus-crawler-workflow — 采析绘的 CatBus 后端适配器
 
@@ -24,6 +25,7 @@ const HELP = `catbus-crawler-workflow — 采析绘的 CatBus 后端适配器
 
 说明:
   run 的 stdout 每行一条采析绘表格行（-o json 时是一个数组）；stderr 最后一行是运行摘要。
+  默认 jsonl：产出一条就写一条，中途被停止或后面失败都不撤回已经写出的行，摘要里的 rows 是实际写出的条数。
   capabilities 输出 平台 × 模式 的 CatBus 支持矩阵，未支持的组合带原因。
   preflight 的 stdout 是单个 JSON，单独检查 CatBus 登录态；未登录时退出码 3，不碰 Selenium cookie。
   CatBus 使用自己的账号：catbus bilibili auth login；和 Selenium cookie 不共用。
@@ -155,6 +157,48 @@ function withProvenance(row: Row): Row {
   return { ...row, 采集方式: 'catbus' }
 }
 
+/** 管道满了就等它腾空：调用方按行读 stdout，把背压换成内存增长不是解决它。 */
+async function defaultWrite(line: string): Promise<void> {
+  if (!process.stdout.write(line)) await once(process.stdout, 'drain')
+}
+
+export interface RowWriter {
+  /** 交给 runMode 的逐行回调。 */
+  onRow: RowSink
+  /** 已经交出去的行数。失败时摘要按它报，不能再说 0。 */
+  readonly written: number
+  /** 收尾：json 格式在这里把缓冲的行作为数组写出。 */
+  finish: () => Promise<void>
+}
+
+/**
+ * `jsonl` 产出一行写一行——采析绘把每行写成一个事务，所以中途停止保住已经落地的每一条；
+ * `json` 的格式本身是一个数组，只能缓冲到结束再整体写出。
+ */
+export function createRowWriter(options: {
+  output: 'json' | 'jsonl'
+  provenance: boolean
+  write?: (line: string) => void | Promise<void>
+}): RowWriter {
+  const write = options.write ?? defaultWrite
+  const rows: Row[] = []
+  let written = 0
+  return {
+    onRow: async (row) => {
+      const line = options.provenance ? withProvenance(row) : row
+      rows.push(line)
+      written += 1
+      if (options.output === 'jsonl') await write(`${JSON.stringify(line)}\n`)
+    },
+    get written() {
+      return written
+    },
+    finish: async () => {
+      if (options.output === 'json') await write(`${JSON.stringify(rows, null, 2)}\n`)
+    },
+  }
+}
+
 function columnsFor(platform: string, mode: string, provenance: boolean): string[] {
   const cap = platformCapability(platform)
   if (!cap) return provenance ? ['采集方式'] : []
@@ -193,6 +237,7 @@ function summary(
 function errorSummary(
   err: CatbusError,
   meta: { platform: string; mode: string; params: RunParams; provenance: boolean },
+  rows = 0,
 ) {
   const cap = platformCapability(meta.platform)
   return {
@@ -203,7 +248,7 @@ function errorSummary(
     platform_input: meta.platform,
     mode: meta.mode,
     status: 'error',
-    rows: 0,
+    rows,
     columns: columnsFor(meta.platform, meta.mode, meta.provenance),
     account: catbusAccount(meta.params),
     warnings: [],
@@ -262,7 +307,10 @@ async function runCommand(
   if (output !== 'json' && output !== 'jsonl') {
     throw new CatbusError('USAGE', `--output 只能是 json 或 jsonl，收到 ${output}`)
   }
+  const provenance = Boolean(options.provenance)
+  const meta = { platform, mode, params, provenance }
   const client = new CatbusClient({ bin: options.catbusBin })
+  const writer = createRowWriter({ output, provenance })
   const onSignal = () => {
     client.close()
     process.exit(130)
@@ -270,15 +318,15 @@ async function runCommand(
   process.once('SIGINT', onSignal)
   process.once('SIGTERM', onSignal)
   try {
-    const result = await runMode(platform, mode, params, client)
-    const rows = options.provenance ? result.rows.map(withProvenance) : result.rows
-    if (output === 'json') {
-      printJson(rows)
-    } else {
-      for (const row of rows) process.stdout.write(`${JSON.stringify(row)}\n`)
-    }
-    printSummary(summary({ ...result, rows }, { platform, mode, params, provenance: Boolean(options.provenance) }))
+    const result = await runMode(platform, mode, params, client, writer.onRow)
+    await writer.finish()
+    printSummary(summary(result, meta))
     return exitForResult(result)
+  } catch (err) {
+    // 已经写出去的行不撤回：采析绘一行一个事务存下了它们，摘要就说实际写出的行数。
+    const e = toCatbusError(err)
+    printSummary(errorSummary(e, meta, writer.written))
+    return e.exitCode
   } finally {
     process.off('SIGINT', onSignal)
     process.off('SIGTERM', onSignal)
