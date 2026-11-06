@@ -121,6 +121,7 @@ export default definePlatform({
           ],
           output: '{id}',
           auth: 'required',
+          mutating: true,
         }),
 
         'series list': impl('full', 'seriesList'),

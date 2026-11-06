@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### Changed
+
+- 同步上游 `cv-cat/catbus` `87dfce4`（0.3.0；该提交的 `ci` 与 `docker` 全部通过，YouTube 提交 `ee20285` 的 CI 是红的，未同步）。上游 0.2.1 → 0.3.0 的 jimeng / maoyan / mteam 三个新平台、bilibili 定时发布与双封面 / 稿件编辑 / 置顶评论、抖音 2046 与小红书 471 登录修复、tiktok 搜索与京东订单中心适配全部收进；适配器清单仍只列已声明身份列、可运行的格子
+- 采析绘适配跟着上游新写命令补齐 `mutating: true`：bilibili `item edit`、`comment pin` / `comment unpin`，以及 0.2.1 就漏标的 tiktok `folder add`（原先会被当成读命令暴露）；`manifest()` 继续按 `mutating` / `stream` / `confirm` 机械排除写命令
+
 ## [0.3.0] - 2026-11-05
 
 ### Fixed
