@@ -143,3 +143,22 @@ CatBus 的归一化 `Item.stats` 只有播放/点赞/评论/收藏/转发，投�
 - 适配器不维护 CatBus 侧的 cursor。一次 `run` 会尽量取到目标条数，详情失败记在 `warnings` / `status` 里；采析绘的去重账本负责跨运行去重，断点续传仍以采析绘自己的 cursor 为准。
 - `--raw` 的字段形状来自 CatBus 0.3.0 的上游接口（同步基线 `cv-cat/catbus` `87dfce4`，其 CI 全绿）。上游字段变化时先更新 CatBus 的移植和测试，再更新这里的映射。
 - CatBus 的 cookie 导入只认 `expirationDate` / `expires`，不认 Selenium 导出的 `expiry`；`httpOnly` / `sameSite` / `secure` 也不会保留。不要直接把 Selenium 的 cookie 文件喂给 CatBus。
+
+## 7. 同步上游
+
+本仓库是 [`cv-cat/catbus`](https://github.com/cv-cat/catbus) 的分支，`master` 同时保留上游历史与采析绘适配提交。同步只做一件事：把上游**最新一个 CI 全绿**的提交合进来，再验证适配。
+
+```bash
+npm run sync:upstream -- --crawler-workflow <采析绘仓库目录>          # 合并并验证，不推送
+npm run sync:upstream -- --crawler-workflow <采析绘仓库目录> --push   # 验证通过后推 origin
+```
+
+脚本（`scripts/sync-upstream.mjs`）的规则：
+
+1. `git fetch upstream` 后从 `upstream/master` 由新到旧找提交；用 `gh run list` 看该提交的**每一条** workflow——有失败、取消或还在跑的都跳过，取最新的全部完成且没有失败的版本。截至本次同步，最新提交 `ee20285`（YouTube）CI 是红的，因此停在 `87dfce4`（0.3.0）。
+2. `git merge --no-commit` 合并，然后 `npm ci` → `npm run build` → `npm test` → `node scripts/audit-mutating.mjs`；给了 `--crawler-workflow` 时还会用 `CATBUS_HOME=<本仓库>` 跑采析绘的 `tests/integration/test_catbus_adapter.py`。
+3. 任何一步失败就 `git merge --abort`，不留下坏提交；全部通过才提交，`--push` 才推送。
+4. 冲突不自动解决：脚本会停下并保留冲突现场，按 `docs/crawler-workflow.md` 的平台映射与 `mutating` 约定人工处理后重跑。
+
+**写命令体检**是同步的硬门槛：`scripts/audit-mutating.mjs` 会找出所有以写动作结尾、却既没有 `mutating` 也没有 `confirm` 的平台命令，并检查适配器清单里没有写命令。上游新增的写命令必须补 `mutating: true`，否则它会作为“读模式”出现在采析绘面板上。
+

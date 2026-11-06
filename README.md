@@ -28,6 +28,8 @@
 
 > 每个平台都有自己的一套接口、签名、登录方式和数据格式。**catbus 把它们装进同一辆车**：同一套命令、同一种 JSON、同一个登录态目录。换平台，只需要换一个词。
 
+> **本仓库是 [`cv-cat/catbus`](https://github.com/cv-cat/catbus) 的采析绘（crawler_workflow）适配分支。** 在上游基础上增加 `catbus-crawler-workflow` 入口与只读能力清单（见 [`docs/crawler-workflow.md`](docs/crawler-workflow.md)）；同步上游最新「CI 全绿」提交用 `npm run sync:upstream -- --crawler-workflow <采析绘目录> --push`。
+
 ## ❤️ Sponsor
 
 <div align="center">
