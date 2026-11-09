@@ -1,0 +1,164 @@
+name: release-macos
+
+# 构建 macOS 便携包并发布到 Gitee Release（国内镜像）。
+# 触发：推送 v* tag（与 release.yml 同时发生），或在 Actions 里手动补发某个版本。
+# 需要仓库 secret：GITEE_ACCESS_TOKEN（Gitee 私人令牌，projects 读写权限）。
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: 要构建的 git ref（tag / commit / 分支）
+        required: true
+        default: master
+      gitee_tag:
+        description: Gitee Release 的 tag，例如 crawler-workflow-v0.3.0（留空则用当前 tag）
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            os: macos-latest
+          - target: darwin-x64
+            os: macos-15-intel
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 取回验证码模型
+        run: |
+          npm run assets:jd
+          npm run assets:ocr
+
+      - name: 构建
+        run: npm run build
+
+      - name: 打便携包
+        run: node scripts/package-portable.mjs --platform ${{ matrix.target }}
+
+      - name: 压缩并分卷（Gitee 单附件 100 MB）
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "build/portable/${{ matrix.target }}"
+          base="catbus-crawler-workflow-${{ matrix.target }}.zip"
+          zip -q -r "$base" catbus-crawler-workflow
+          split -b 90m "$base" "${base}.part."
+          i=1
+          for part in "${base}".part.*; do
+            n=$(printf '%03d' "$i")
+            mv "$part" "$base.$n"
+            i=$((i + 1))
+          done
+          rm -f "$base"
+          shasum -a 256 "$base".* > "SHA256SUMS-${{ matrix.target }}.txt"
+          ls -lh "$base".* "SHA256SUMS-${{ matrix.target }}.txt"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            build/portable/${{ matrix.target }}/*.zip.*
+            build/portable/${{ matrix.target }}/SHA256SUMS-*.txt
+
+  publish-gitee:
+    name: publish (gitee)
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      GITEE_ACCESS_TOKEN: ${{ secrets.GITEE_ACCESS_TOKEN }}
+      GITEE_OWNER: ${{ vars.GITEE_OWNER || 'Xingye-Dujing' }}
+      GITEE_REPO: ${{ vars.GITEE_REPO || 'catbus-crawler-workflow' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.git_ref || github.ref }}
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: macos-*
+          path: gitee-assets
+          merge-multiple: true
+
+      - name: 生成校验和与说明
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd gitee-assets
+          sha256sum *.zip.* > SHA256SUMS.txt
+          rm -f SHA256SUMS-*.txt
+          {
+            echo '<!-- catbus-macos -->'
+            echo ''
+            echo '## macOS 便携包（GitHub Actions 构建）'
+            echo ''
+            echo '适用 macOS 12+；Apple Silicon 与 Intel 各一份。需要本机有 Node（`^22.22.2 || ^24.15.0 || >=26.0.0`）。'
+            echo ''
+            echo 'Gitee 单附件限制 100 MB，所以按 90 MiB 分卷。下载同一架构的全部分卷后合并：'
+            echo ''
+            echo '```sh'
+            echo 'cat catbus-crawler-workflow-darwin-arm64.zip.* > catbus-crawler-workflow-darwin-arm64.zip'
+            echo 'cat catbus-crawler-workflow-darwin-x64.zip.*   > catbus-crawler-workflow-darwin-x64.zip'
+            echo 'unzip catbus-crawler-workflow-darwin-arm64.zip   # 或 -x64'
+            echo '```'
+            echo ''
+            echo '也可以直接用 7-Zip 打开 `.001`。解压后运行 `bin/catbus` 或 `bin/catbus-crawler-workflow`；'
+            echo '若被 Gatekeeper 拦截，执行一次 `xattr -dr com.apple.quarantine <解压目录>`。'
+            echo ''
+            echo '| 文件 | 大小 |'
+            echo '|---|---|'
+            for f in *; do echo "| \`$f\` | $(du -h "$f" | cut -f1) |"; done
+            echo ''
+            echo 'SHA-256 见 `SHA256SUMS.txt`。'
+          } > ../notes.md
+          cat ../notes.md
+      - name: 发布到 Gitee
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${GITEE_ACCESS_TOKEN}" ]; then
+            echo "::error::缺少仓库 secret GITEE_ACCESS_TOKEN（Gitee 私人令牌，需要 projects 读写权限）"
+            exit 1
+          fi
+          if [ -n "${{ inputs.gitee_tag }}" ]; then
+            tag="${{ inputs.gitee_tag }}"
+          elif [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="crawler-workflow-${GITHUB_REF_NAME}"
+          else
+            echo "::error::workflow_dispatch 必须填写 gitee_tag"
+            exit 1
+          fi
+          version=$(node -p "require('./package.json').version")
+          echo "Gitee Release tag: $tag（catbus $version）"
+          node scripts/gitee-release.mjs \
+            --tag "$tag" \
+            --version "$version" \
+            --dir gitee-assets \
+            --notes notes.md

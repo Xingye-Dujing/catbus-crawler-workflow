@@ -53,6 +53,7 @@
     "gen:capabilities": "npm run build && node scripts/gen-capabilities.mjs",
     "sync:upstream": "node scripts/sync-upstream.mjs",
     "audit:mutating": "npm run build && node scripts/audit-mutating.mjs",
+    "package:portable": "node scripts/package-portable.mjs",
     "prepack": "npm run build",
     "assets:jd": "node scripts/fetch-jd-models.mjs",
     "assets:ocr": "node scripts/fetch-ocr-models.mjs"

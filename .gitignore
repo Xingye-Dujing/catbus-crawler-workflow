@@ -8,6 +8,7 @@ packages/assets-ocr/models/
 .golden/
 .e2e/
 .build/
+build/portable/
 __pycache__/
 *.pyc
 .DS_Store

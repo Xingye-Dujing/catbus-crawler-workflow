@@ -162,3 +162,22 @@ npm run sync:upstream -- --crawler-workflow <采析绘仓库目录> --push   # �
 
 **写命令体检**是同步的硬门槛：`scripts/audit-mutating.mjs` 会找出所有以写动作结尾、却既没有 `mutating` 也没有 `confirm` 的平台命令，并检查适配器清单里没有写命令。上游新增的写命令必须补 `mutating: true`，否则它会作为“读模式”出现在采析绘面板上。
 
+## 8. 便携包与 Gitee 镜像
+
+Gitee Release 是给国内用户的下载镜像（GitHub Release 不放大文件）。发行物是**便携包**：`dist` + 生产依赖 + JD / OCR 模型 + `bin/` 启动脚本，解压即用，但本机仍需 Node。
+
+```bash
+npm run build
+npm run assets:jd && npm run assets:ocr
+node scripts/package-portable.mjs --platform darwin-arm64   # 或 darwin-x64 / win32-x64
+```
+
+`.github/workflows/release-macos.yml` 负责 macOS 两份（`darwin-arm64`、`darwin-x64`）：
+
+- 推送 `v*` tag 时自动构建并发布；也可以在 Actions 里手动 `workflow_dispatch`，指定 `git_ref`（tag / commit）和 `gitee_tag` 补发旧版本。
+- 产物按 90 MiB 分卷（Gitee 单附件上限 100 MB），命名 `catbus-crawler-workflow-<目标>.zip.001`、`.002`……，并附 `SHA256SUMS.txt`。
+- 发布前需要在 GitHub 仓库配置 secret `GITEE_ACCESS_TOKEN`（Gitee 私人令牌，`projects` 读写权限）；可用 `vars.GITEE_OWNER` / `vars.GITEE_REPO` 覆盖默认仓库。
+- 发布脚本 `scripts/gitee-release.mjs` 按 tag 找 Release（没有就创建），同名附件已存在则跳过，并把 macOS 下载说明追加到 Release 正文（marker `<!-- catbus-macos -->`，重跑不会重复追加）。
+- macOS 包不签名、不公证；从网络下载后被 Gatekeeper 拦截时，执行 `xattr -dr com.apple.quarantine <解压目录>`。
+
+

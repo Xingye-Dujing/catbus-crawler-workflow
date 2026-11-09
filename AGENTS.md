@@ -3,6 +3,25 @@
 > 本文件是本项目给所有 AI 编码代理（Claude Code / Codex / Cursor 等）的统一说明，也是 catbus 的规范本身。
 > `CLAUDE.md` 通过 `@AGENTS.md` 引用本文件，**只维护这一份**。
 
+## 0. Agent 速查
+
+- 本仓库是 [`cv-cat/catbus`](https://github.com/cv-cat/catbus) 的**采析绘（crawler_workflow）适配分支**：`master` 同时保留上游历史与适配提交。额外入口 `catbus-crawler-workflow` 在 `src/integrations/crawler-workflow/`，说明见 `docs/crawler-workflow.md`。除适配层外，行为以上游规范为准。
+- 开发命令（Node 22 / 24 / 26；Windows 上用 PowerShell 直接跑，路径用绝对路径）：
+  - 首次安装后跑 `npm run assets:jd`、`npm run assets:ocr` 取回验证码模型（不进 git，CI 也这么做）；否则 JD / B 站验证码测试会失败。
+  - 提交前顺序：`npm run typecheck` → `npm test`（即 `vitest run`，**禁止联网**，`tests/setup.ts` 会把真实请求变成异常）。
+  - 单文件：`npx vitest run tests/xhs.test.ts`；单用例：`npx vitest run tests/xhs.test.ts -t "<用例名>"`。测试时区固定 `Asia/Shanghai`，单用例超时 60 秒。
+  - `npm run build` 产出 `dist/`（CLI 入口 `dist/cli/main.js`）。仓库没有 lint 脚本，`typecheck` 就是类型检查关卡。
+- 改了注册表（`src/platforms/*/index.ts`）后跑 `npm run gen:capabilities`（内部先 build），并提交 `docs/capabilities.md`；测试会检查它是否最新。
+- 采析绘适配层：
+  - `npm run build && node dist/integrations/crawler-workflow/cli.js capabilities` 查看 平台 × 模式 矩阵；`run` / `preflight` 的用法与输出契约见 `docs/crawler-workflow.md`。
+  - `npm run audit:mutating`（先 build）是硬门槛：以写动作结尾的命令必须带 `mutating` 或 `confirm`，且适配器清单里不能出现写命令。新增写命令用 `write()` 声明，手写扩展时别漏标。
+  - 适配器只把 CatBus 的 JSON 映射成采析绘表格行，**不修改 `crawler_workflow` 仓库**，边界是子进程 + JSONL；独立只读模式由注册表自动生成，不要手维护名单。
+- 同步上游：`npm run sync:upstream -- --crawler-workflow <采析绘目录> [--push]`。脚本用 `gh run list` 找**最新一个上游 CI 全绿**的 `upstream/master` 提交，`git merge --no-commit` 后依次 `npm ci` → build → test → `audit-mutating`（可选采析绘集成测试），任一步失败自动 `git merge --abort`；冲突不自动解决，按 `docs/crawler-workflow.md` 人工处理后重跑。
+- 便携包：`node scripts/package-portable.mjs --platform <darwin-arm64|darwin-x64|win32-x64>`（先 build + `assets:*`）。macOS 发行由 `.github/workflows/release-macos.yml` 构建并按 90 MiB 分卷发到 Gitee Release，需要 secret `GITEE_ACCESS_TOKEN`；细节见 `docs/crawler-workflow.md` 第 8 节。
+- 平台实现样板是 `src/platforms/bilibili/web/`（`client.ts` / `api.ts` / `commands.ts` / `normalize.ts` / `resolve.ts`）；请求构造与签名必须有对拍测试（7.5）。
+- `.claude/skills/catbus/` 是 Agent 技能的唯一权威副本（`tests/skill.test.ts` 只校验它）；`.agents/skills/catbus/` 是旧的镜像，已缺 12306 / jimeng / maoyan / mteam，改技能时以 `.claude/` 为准。
+- `dist/`、`build/`、`.golden/`、`.e2e/` 都是产物/缓存；`references/` 只读；真实 cookie / token / 私钥绝不写进仓库、fixture 或日志。
+
 ## 1. 目标
 
 做**一个 CLI —— 操作各大平台接口的统一入口**。
@@ -830,7 +849,7 @@ stdout 只输出结果。日志、提示、进度、二维码一律输出到 std
 
 | 包 | 内容 |
 |---|---|
-| `catbus-cli` | `dist/`（CLI、core、全部平台）和 `static/`（上游签名 JS 等）。bin 为 `catbus` → `dist/cli/main.js` |
+| `catbus-cli` | `dist/`（CLI、core、全部平台、采析绘适配器）和 `static/`（上游签名 JS 等）。bin 为 `catbus` → `dist/cli/main.js`，以及本分支新增的 `catbus-crawler-workflow` → `dist/integrations/crawler-workflow/cli.js` |
 | `@cv-cat/catbus-assets-jd` | JD 验证码（JCAP）的 onnx 模型，约 81 MB。作为 `catbus-cli` 的普通依赖，精确钉版本 |
 | `@cv-cat/catbus-assets-ocr` | 验证码 OCR 模型：ddddocr 1.6.1 的检测模型 `common_det.onnx`、识别模型 `common_old.onnx` 和字符集，约 34 MB（B 站极验点选在用）。同样是精确钉版本的普通依赖 |
 
@@ -995,13 +1014,16 @@ All-In-One/
 │   ├── guide/  platforms/          # 用户指南、各平台说明
 │   ├── examples/                   # 组合 catbus 的示例脚本
 │   ├── capabilities.md             # 能力矩阵（由注册表生成，不手改）
+│   ├── crawler-workflow.md         # 采析绘适配：模式矩阵、列契约、上游同步规则
 │   ├── upstream-map.md             # 上游移植对照
 │   └── trouble.md  roadmap.md      # 内部文档（真机验证记录、路线图）：只在本地，不进版本控制
-├── .claude/skills/catbus/          # 给 AI Agent 的技能：SKILL.md 总纲，platforms/、workflows/ 按需读；与注册表的一致性由 tests/skill.test.ts 检查
+├── .claude/skills/catbus/          # 给 AI Agent 的技能（权威副本）：SKILL.md 总纲，platforms/、workflows/ 按需读；与注册表的一致性由 tests/skill.test.ts 检查
+├── .agents/skills/catbus/          # 上述技能的旧镜像，未被测试校验，已落后；改技能只改 .claude/
 ├── references/                     # 上游仓库：只读，不进版本控制
 ├── src/
 │   ├── cli/                        # 入口 main.ts、argv 解析、帮助、信封输出、确认
 │   ├── core/                       # registry、auth store、config、errors、http、schemas、signing(vm)、log
+│   ├── integrations/crawler-workflow/  # 采析绘适配器：manifest 从注册表生成，只读命令映射成表格行
 │   ├── platforms/_shared/          # 多个平台共用、但不属于 core 的实现，例如 impaas.ts（闲鱼、淘宝的钉钉 IMPaaS 私信长连）
 │   └── platforms/<p>/
 │       ├── index.ts                # 平台声明与命令注册
