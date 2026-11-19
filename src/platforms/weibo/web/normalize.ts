@@ -17,7 +17,8 @@ export function itemUrl(mid: string, uid?: unknown, bid?: unknown): string {
 
 export function ref(u: any): UserRef | null {
   const id = u?.idstr ?? u?.id
-  return n.userRef({ id, name: u?.screen_name, url: id == null || id === '' ? null : userUrl(id) })
+  // 头像：profile_image_url 是小图（列表里够用），没有时 avatar_large / avatar_hd
+  return n.userRef({ id, name: u?.screen_name, url: id == null || id === '' ? null : userUrl(id), avatar: u?.profile_image_url || u?.avatar_large || u?.avatar_hd })
 }
 
 /** "21万次播放" / "1,234" → 整数。 */
@@ -83,6 +84,14 @@ function video(m: any): Media | null {
   )
 }
 
+/** 媒体从哪条微博取：自己没有 page_info、也没有图片的转发微博取原微博（retweeted_status），其余取自己。 */
+function mediaSource(m: any): any {
+  const rt = m?.retweeted_status
+  if (!rt || typeof rt !== 'object') return m
+  if (m.page_info || images(m).length || Number(m.pic_num) > 0) return m
+  return rt
+}
+
 const VISIBLE: Record<number, ItemStatus> = { 0: 'published', 1: 'private', 6: 'published', 10: 'published' }
 
 /**
@@ -91,24 +100,26 @@ const VISIBLE: Record<number, ItemStatus> = { 0: 'published', 1: 'private', 6: '
 export function mblog(m: any, own = false): Item {
   const id = n.id(m.idstr ?? m.mid ?? m.id)
   const author = ref(m.user)
-  const vid = isVideo(m) ? video(m) : null
-  const pics = images(m)
+  // 转发微博自己没有媒体时，媒体、封面、类型取原微博（AGENTS 4.8）；正文、作者、计数仍是转发这条的
+  const src = mediaSource(m)
+  const vid = isVideo(src) ? video(src) : null
+  const pics = images(src)
   const media = vid ? [vid] : pics
-  const kind: ItemKind = vid ? 'video' : m.page_info?.object_type === 'article' || m.page_info?.type === 'article' ? 'article' : pics.length || Number(m.pic_num) > 0 ? 'image' : 'text'
-  const cover = vid ? n.url(m.page_info?.page_pic?.url ?? m.page_info?.page_pic) : (pics[0]?.url ?? null)
+  const kind: ItemKind = vid ? 'video' : src.page_info?.object_type === 'article' || src.page_info?.type === 'article' ? 'article' : pics.length || Number(src.pic_num) > 0 ? 'image' : 'text'
+  const cover = vid ? n.url(src.page_info?.page_pic?.url ?? src.page_info?.page_pic) : (pics[0]?.url ?? null)
   return n.item(
     {
       id,
       kind,
       url: itemUrl(id, author?.id, m.mblogid ?? m.bid),
-      title: kind === 'article' ? n.str(m.page_info?.page_title ?? m.page_info?.content1) : null,
+      title: kind === 'article' ? n.str(src.page_info?.page_title ?? src.page_info?.content1) : null,
       text: n.str(m.text_raw) ?? n.plainText(m.text),
       author,
       created_at: n.time(m.created_at),
       cover,
       media,
       stats: {
-        views: vid ? plays(m.page_info?.play_count ?? m.page_info?.media_info?.online_users_number) : null,
+        views: vid ? plays(src.page_info?.play_count ?? src.page_info?.media_info?.online_users_number) : null,
         likes: n.count(m.attitudes_count),
         comments: n.count(m.comments_count),
         shares: n.count(m.reposts_count),
@@ -141,6 +152,16 @@ export function user(u: any): User {
   )
 }
 
+/**
+ * 评论附带的图片：weibo.com 的图片评论把图片放在 `url_struct[i].pic_infos`（正文里只有「查看图片」短链），
+ * 也可能直接在评论上的 `pic_infos`；m.weibo.cn 的评论是单张的 `pic`。按地址去重。
+ */
+function commentImages(c: any): Media[] {
+  const all = [...images(c), ...(Array.isArray(c?.url_struct) ? c.url_struct : []).flatMap((u: any) => images(u)), ...(c?.pic ? images({ pics: [c.pic] }) : [])]
+  const seen = new Set<string>()
+  return all.filter((m) => !seen.has(m.url!) && !!seen.add(m.url!))
+}
+
 /** buildComments 的一条评论。 */
 export function comment(c: any, itemId: string): Comment {
   const id = n.id(c.idstr ?? c.id)
@@ -152,6 +173,7 @@ export function comment(c: any, itemId: string): Comment {
       parent_id: root && root !== id ? root : null,
       author: ref(c.user),
       text: n.str(c.text_raw) ?? n.plainText(c.text) ?? '',
+      media: commentImages(c),
       created_at: n.time(c.created_at),
       stats: { likes: n.count(c.like_counts), replies: n.count(c.total_number) },
     },

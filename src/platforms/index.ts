@@ -1,5 +1,6 @@
 import type { Platform } from '../core/registry.js'
 import bilibili from './bilibili/index.js'
+import discord from './discord/index.js'
 import douyin from './douyin/index.js'
 import jimeng from './jimeng/index.js'
 import jd from './jd/index.js'
@@ -13,9 +14,10 @@ import weibo from './weibo/index.js'
 import x from './x/index.js'
 import xhs from './xhs/index.js'
 import xianyu from './xianyu/index.js'
+import youtube from './youtube/index.js'
 
 /** 注册表：平台声明只含元数据，handler 按需懒加载。顺序即帮助和文档里的列顺序。 */
-export const PLATFORMS: Platform[] = [xhs, douyin, tiktok, bilibili, kuaishou, weibo, xianyu, taobao, jd, x, rail12306, jimeng, maoyan, mteam]
+export const PLATFORMS: Platform[] = [xhs, douyin, tiktok, bilibili, kuaishou, weibo, xianyu, taobao, jd, x, youtube, rail12306, jimeng, maoyan, mteam, discord]
 
 const byName = new Map(PLATFORMS.flatMap((p) => [p.id, ...p.aliases].map((n) => [n, p] as const)))
 

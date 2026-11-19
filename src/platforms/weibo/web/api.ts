@@ -30,6 +30,8 @@ import { APP_SOURCE, sessionId, uploadImageParams, uploadVideoParams } from './s
 export interface SelfInfo {
   uid: string
   nick: string
+  /** $CONFIG.user 的头像（avatar_hd > avatar_large > profile_image_url），没有时为 null。 */
+  avatar: string | null
 }
 
 const CONFIG_RE = /try\{window\.\$CONFIG = (.*?);\}catch\(e\)\{window\.\$CONFIG/
@@ -50,7 +52,8 @@ export async function selfInfo(w: Weibo): Promise<SelfInfo | null> {
   }
   const uid = config?.user?.id
   if (uid == null || uid === '') return null
-  return { uid: String(uid), nick: String(config.user.watermark?.nick ?? config.user.screen_name ?? '') }
+  const u = config.user
+  return { uid: String(uid), nick: String(u.watermark?.nick ?? u.screen_name ?? ''), avatar: u.avatar_hd || u.avatar_large || u.profile_image_url || null }
 }
 
 /** getUserInfo：用户资料。 */
@@ -82,6 +85,36 @@ export function comments(w: Weibo, uid: string, mid: string, maxId?: string) {
   if (maxId) params.push(['max_id', maxId])
   params.push(['count', '10'], ['uid', uid], ['fetch_level', '0'], ['locale', 'zh-CN'])
   return w.json('com', { url: `${WEB}/ajax/statuses/buildComments`, headers: commonHeaders(w.xsrf), query: params })
+}
+
+// ================================================================ feed（WeiboApis.getHotTimeline / getFriendsTimeline）
+
+/**
+ * 推荐流（hottimeline）：网页「发现」页的推荐，与「热门」页是同一条流。
+ * group_id / containerid 固定为热门流 102803；不带它们时 ok=0。
+ * 翻页：把上一页响应里的 since_id（对象 {ul_sid, ul_hid, since_id}）原样回传成 since_id 参数。
+ */
+export function feedRecommend(w: Weibo, sinceId: string | null) {
+  const params: Pairs = [['since_id', sinceId ?? '0'], ['refresh', '0'], ['group_id', '102803'], ['containerid', '102803'], ['extparam', 'discover|new_feed'], ['max_id', '0'], ['count', '20']]
+  return w.json('com', { url: `${WEB}/ajax/feed/hottimeline`, headers: commonHeaders(w.xsrf), query: params })
+}
+
+/** 关注流（friendstimeline）：关注的人的最新微博；since_id=0 从头开始，翻页带上一页的 max_id。 */
+export function feedFollowing(w: Weibo, maxId: string | null) {
+  const params: Pairs = [['list_id', ''], ['refresh', '4'], ['since_id', '0'], ['count', '20']]
+  if (maxId) params.push(['max_id', maxId])
+  return w.json('com', { url: `${WEB}/ajax/feed/friendstimeline`, headers: commonHeaders(w.xsrf), query: params })
+}
+
+// ================================================================ keyword（非上游）
+
+/**
+ * 非上游：热搜榜（`keyword hot`）。上游没有这个接口，按网页端「热搜」榜补的
+ * （weibo-pro-next 的 RANK_TAB_GROUP_MAP.search），没有对拍。
+ * data.realtime 是榜单（夹着广告位，is_ad=1），data.hotgov 是置顶词。
+ */
+export function hotSearch(w: Weibo) {
+  return w.json('com', { url: `${WEB}/ajax/side/hotSearch`, headers: commonHeaders(w.xsrf) })
 }
 
 // ================================================================ WeiboMobileApis（m.weibo.cn）

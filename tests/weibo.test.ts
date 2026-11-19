@@ -1,14 +1,17 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CatbusError } from '../src/core/errors.js'
+import { parseCookieInput } from '../src/core/cookies.js'
+import { newCredential, setCurrent, writeCredential } from '../src/core/auth-store.js'
 import { fakeResponse, mockSender } from '../src/core/http.js'
 import { plainText } from '../src/core/normalize.js'
 import { RAW } from '../src/core/schemas.js'
 import * as api from '../src/platforms/weibo/web/api.js'
 import { check, riskCheck, Weibo } from '../src/platforms/weibo/web/client.js'
 import * as cmd from '../src/platforms/weibo/web/commands.js'
+import { mblog } from '../src/platforms/weibo/web/normalize.js'
 import { resolveItem } from '../src/platforms/weibo/web/resolve.js'
 import { bidToMid, fileParams, midToBid } from '../src/platforms/weibo/web/sign.js'
 import { expectRequests, type GoldenCase, type GoldenRequest, loadCase, makeCtx, replay } from './golden.js'
@@ -50,6 +53,10 @@ const CASES: Record<string, (c: GoldenCase) => Promise<unknown>> = {
   user_posted_p1: logged((w) => api.userPosted(w, '1669879400', '1', '')),
   user_posted_p2: logged((w) => api.userPosted(w, '1669879400', '2', '4937540924966431kp2')),
   comments: logged((w) => api.comments(w, '5266778656', MID)),
+  feed_hot_p1: logged((w) => api.feedRecommend(w, null)),
+  feed_hot_p2: logged((w) => api.feedRecommend(w, '{"ul_sid":"fake-ul-sid","ul_hid":"fake-ul-hid","since_id":"5079000000000001"}')),
+  feed_friends_p1: logged((w) => api.feedFollowing(w, null)),
+  feed_friends_p2: logged((w) => api.feedFollowing(w, '5079000000000001')),
   mobile_detail: logged((w) => api.mobileDetail(w, MID)),
   mobile_search: logged((w) => api.mobileSearch(w, '猫 咪&狗', 1)),
   mobile_search_p2: logged((w) => api.mobileSearch(w, '猫', 2)),
@@ -187,6 +194,43 @@ describe('weibo 对拍：命令流程', () => {
     expectRequests(second.requests, p2.requests)
   })
 
+  it('登录 feed list（recommend）：两页，cursor 是 since_id 对象的紧凑 JSON，原样回传', async () => {
+    const p1 = loadCase('weibo', 'feed_hot_p1')
+    const first = await replay(p1, () => cmd.feedList(loggedCtx()))
+    if (first.error) throw first.error
+    expectRequests(first.requests, p1.requests)
+    const r1 = first.result as { data: any[]; page: { cursor: string } }
+    expect(r1.page).toEqual({ cursor: '{"ul_sid":"fake-ul-sid","ul_hid":"fake-ul-hid","since_id":"5079000000000001"}', has_more: true })
+    expect(r1.data[0]).toMatchObject({ id: '5079000000000001', kind: 'image', url: 'https://weibo.com/10001/OwfakeBid' })
+
+    const p2 = loadCase('weibo', 'feed_hot_p2')
+    const second = await replay(p2, () => cmd.feedList(loggedCtx({ cursor: r1.page.cursor })))
+    if (second.error) throw second.error
+    expectRequests(second.requests, p2.requests)
+  })
+
+  it('登录 feed list --kind hot：与 recommend 是同一条流，请求相同', async () => {
+    const c = loadCase('weibo', 'feed_hot_p1')
+    const { requests, error } = await replay(c, () => cmd.feedList(loggedCtx({ options: { kind: 'hot' } })))
+    if (error) throw error
+    expectRequests(requests, c.requests)
+  })
+
+  it('登录 feed list --kind following：两页，翻页带上一页的 max_id', async () => {
+    const p1 = loadCase('weibo', 'feed_friends_p1')
+    const ctx = loggedCtx({ options: { kind: 'following' } })
+    const first = await replay(p1, () => cmd.feedList(ctx))
+    if (first.error) throw first.error
+    expectRequests(first.requests, p1.requests)
+    const r1 = first.result as { page: { cursor: string } }
+    expect(r1.page).toEqual({ cursor: '5079000000000001', has_more: true })
+
+    const p2 = loadCase('weibo', 'feed_friends_p2')
+    const second = await replay(p2, () => cmd.feedList({ ...ctx, cursor: r1.page.cursor }))
+    if (second.error) throw second.error
+    expectRequests(second.requests, p2.requests)
+  })
+
   it('登录 comment list：链接里带作者 uid，不用再查详情；翻页带 max_id', async () => {
     const c = loadCase('weibo', 'comments')
     const ctx = loggedCtx({ args: { item: 'https://weibo.com/5266778656/OuIv3hbiw' } })
@@ -218,6 +262,17 @@ describe('weibo 对拍：命令流程', () => {
     expectRequests(requests, c.requests)
     expect(result).toMatchObject({ logged_in: true, user: { id: '10001', name: '测试昵称', url: 'https://weibo.com/u/10001' }, method: 'cookie' })
     expect(new Date((result as any).expires_at).getTime()).toBe(1790259200_000)
+  })
+
+  it('auth status 头像：$CONFIG.user 的 avatar_hd 优先，统一成 https；golden 里没有头像时为 null', async () => {
+    const c = loadCase('weibo', 'self_info')
+    expect((await replay(c, () => cmd.authStatus(loggedCtx()))).result).toMatchObject({ user: { avatar: null } })
+    const body = String(c.responses[0]!.body).replace('"screen_name"', '"avatar_hd": "http://tvax1.sinaimg.cn/crop.0.0.180.180.1024/hd.jpg", "avatar_large": "https://large.jpg", "screen_name"')
+    const patched = { ...c, responses: [{ ...c.responses[0]!, body }] }
+    const { requests, result, error } = await replay(patched, () => cmd.authStatus(loggedCtx()))
+    if (error) throw error
+    expectRequests(requests, c.requests)
+    expect((result as any).user).toEqual({ id: '10001', name: '测试昵称', url: 'https://weibo.com/u/10001', avatar: 'https://tvax1.sinaimg.cn/crop.0.0.180.180.1024/hd.jpg' })
   })
 
   it('item publish 图文：get_self_info → 逐张上传 → statuses/update（上游 post_weibo）', async () => {
@@ -455,5 +510,224 @@ describe('weibo 纯算', () => {
 
   it('正文 HTML → 纯文本', () => {
     expect(plainText('a<br />b <a href="x"><span class="surl-text">#话题#</span></a><img alt="[笑]" src="y"/> &lt;&amp;&gt;')).toBe('a\nb #话题#[笑] <&>')
+  })
+})
+
+// ---------------------------------------------------------------- feed list：真实响应的解析（请求构造见上面的对拍；这里用真机响应裁剪的 fixture，覆盖视频、广告过滤等形态）
+
+describe('weibo 转发微博的归一化（AGENTS 4.8）', () => {
+  const video = {
+    type: 'video',
+    object_type: 'video',
+    object_id: '1034:5000000000000001',
+    page_pic: { url: 'https://wx2.sinaimg.cn/orj480/fakecover.jpg' },
+    play_count: '1.2万次播放',
+    urls: { mp4_720p_mp4: 'https://f.video.weibocdn.com/o0/fake720.mp4', mp4_hd_mp4: 'https://f.video.weibocdn.com/o0/fakehd.mp4' },
+    media_info: { duration: 12 },
+  }
+  const original = {
+    id: '5000000000000002',
+    bid: 'Orig0001',
+    text: '原微博的正文',
+    user: { id: 2000000002, screen_name: '原作者' },
+    page_info: video,
+    pic_num: 0,
+    attitudes_count: 999,
+  }
+  const repost = (extra: object = {}) => ({
+    id: '5000000000000003',
+    bid: 'Repo0001',
+    text: '转发语',
+    created_at: 'Sat Oct 31 13:56:26 +0800 2026',
+    user: { id: 2000000003, screen_name: '转发者' },
+    pic_num: 0,
+    pic_ids: [],
+    attitudes_count: 213,
+    reposts_count: 21,
+    retweeted_status: original,
+    ...extra,
+  })
+
+  it('转发这条自己没有媒体：kind、cover、media、播放数取原微博，正文、作者、计数仍是转发这条的', () => {
+    const item = mblog(repost())
+    expect(item.id).toBe('5000000000000003')
+    expect(item.text).toBe('转发语')
+    expect(item.author?.name).toBe('转发者')
+    expect(item.stats.likes).toBe(213)
+    expect(item.kind).toBe('video')
+    expect(item.cover).toBe('https://wx2.sinaimg.cn/orj480/fakecover.jpg')
+    expect(item.media.map((x) => [x.type, x.url])).toEqual([['video', 'https://f.video.weibocdn.com/o0/fake720.mp4']])
+    expect(item.stats.views).toBe(12000)
+  })
+
+  it('原微博是图文：media 为原微博的图片', () => {
+    const item = mblog(repost({ retweeted_status: { ...original, page_info: undefined, pic_num: 1, pics: [{ pid: 'p1', large: { url: 'https://wx1.sinaimg.cn/large/p1.jpg', geo: { width: 800, height: 600 } } }] } }))
+    expect(item.kind).toBe('image')
+    expect(item.cover).toBe('https://wx1.sinaimg.cn/large/p1.jpg')
+    expect(item.media.map((x) => x.url)).toEqual(['https://wx1.sinaimg.cn/large/p1.jpg'])
+  })
+
+  it('转发这条自己带图片或卡片时用自己的，不取原微博', () => {
+    const withPic = mblog(repost({ pic_num: 1, pics: [{ pid: 'own', large: { url: 'https://wx1.sinaimg.cn/large/own.jpg' } }] }))
+    expect(withPic.kind).toBe('image')
+    expect(withPic.media.map((x) => x.url)).toEqual(['https://wx1.sinaimg.cn/large/own.jpg'])
+    const withCard = mblog(repost({ page_info: { type: 'webpage', page_title: '链接' } }))
+    expect(withCard.kind).toBe('text')
+    expect(withCard.media).toEqual([])
+  })
+
+  it('不是转发、自己也没有媒体：仍是纯文字', () => {
+    const item = mblog(repost({ retweeted_status: undefined }))
+    expect(item.kind).toBe('text')
+    expect(item.cover).toBeNull()
+    expect(item.media).toEqual([])
+  })
+})
+
+const feedFixture = (name: string) => readFileSync(join(import.meta.dirname, 'fixtures/weibo', name), 'utf8')
+
+function mockFeed(routes: Record<string, string>) {
+  const calls: { url: string; query: URLSearchParams }[] = []
+  return {
+    calls,
+    restore: mockSender((p) => {
+      const u = new URL(p.url)
+      calls.push({ url: p.url, query: u.searchParams })
+      const body = routes[u.pathname]
+      if (!body) throw new Error(`未录制的请求：${u.pathname}`)
+      return fakeResponse(body, { headers: [['content-type', 'application/json']] })
+    }),
+  }
+}
+
+describe('weibo feed list：解析真实响应（fixture）', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('默认 recommend：hottimeline，cursor 是上一页 since_id 对象的 JSON 原文', async () => {
+    const m = mockFeed({ '/ajax/feed/hottimeline': feedFixture('feed_hot.json') })
+    try {
+      const result = await cmd.feedList(loggedCtx())
+      const r = result as { data: any[]; page: { cursor: string | null; has_more: boolean } }
+      expect(m.calls[0]!.url).toBe(
+        'https://weibo.com/ajax/feed/hottimeline?since_id=0&refresh=0&group_id=102803&containerid=102803&extparam=discover%7Cnew_feed&max_id=0&count=20',
+      )
+      expect(r.data[0]).toMatchObject({ id: '5369000000000000', kind: 'video', author: { id: '10000', name: '测试用户0' } })
+      expect(r.page.cursor).toBe('{"ul_sid":"","ul_hid":"","since_id":"5368000000000001"}')
+      expect(r.page.has_more).toBe(true)
+    } finally {
+      m.restore()
+    }
+  })
+
+  it('recommend 翻页：把 cursor 原样回传成 since_id 参数', async () => {
+    const m = mockFeed({ '/ajax/feed/hottimeline': feedFixture('feed_hot.json') })
+    try {
+      const ctx = loggedCtx({ cursor: '{"ul_sid":"","ul_hid":"","since_id":"5368000000000001"}' })
+      await cmd.feedList(ctx)
+      expect(m.calls[0]!.query.get('since_id')).toBe('{"ul_sid":"","ul_hid":"","since_id":"5368000000000001"}')
+    } finally {
+      m.restore()
+    }
+  })
+
+  it('following：friendstimeline，cursor 是上一页的 max_id；第二页带 max_id', async () => {
+    const m = mockFeed({ '/ajax/feed/friendstimeline': feedFixture('feed_friends.json') })
+    try {
+      const first = { result: await cmd.feedList(loggedCtx({ options: { kind: 'following' } })) }
+      expect(m.calls[0]!.url).toBe('https://weibo.com/ajax/feed/friendstimeline?list_id=&refresh=4&since_id=0&count=20')
+      const r1 = (first as { result: any }).result as { page: { cursor: string | null } }
+      expect(r1.page.cursor).toBe('5368000000000099')
+
+      m.calls.length = 0
+      const second = { result: await cmd.feedList(loggedCtx({ options: { kind: 'following' }, cursor: r1.page.cursor! })) }
+      expect(m.calls[0]!.query.get('max_id')).toBe('5368000000000099')
+    } finally {
+      m.restore()
+    }
+  })
+
+  it('hot 与 recommend 是同一条流：同样的请求', async () => {
+    const m = mockFeed({ '/ajax/feed/hottimeline': feedFixture('feed_hot.json') })
+    try {
+      await cmd.feedList(loggedCtx({ options: { kind: 'hot' } }))
+      expect(m.calls[0]!.url).toContain('/ajax/feed/hottimeline?')
+    } finally {
+      m.restore()
+    }
+  })
+
+})
+
+describe('weibo feed list（CLI）', () => {
+  useTempHome()
+
+  it('未登录报 AUTH_REQUIRED（web 端 feed 需要登录）', async () => {
+    const r = await cli('weibo', 'feed', 'list')
+    expect(r.env.error).toMatchObject({ code: 'AUTH_REQUIRED', hint: 'catbus weibo auth login' })
+    expect(r.code).toBe(3)
+  })
+
+  it('登录后输出信封与 Item；--kind following 同样可用', async () => {
+    const cred = newCredential({ platform: 'weibo', endpoint: 'web', account: 'default', method: 'cookie' })
+    cred.scopes.main!.cookies = parseCookieInput(COOKIES, '.weibo.com')
+    await writeCredential(cred)
+    await setCurrent('weibo', 'web', 'default')
+    const m = mockFeed({
+      '/ajax/feed/hottimeline': feedFixture('feed_hot.json'),
+      '/ajax/feed/friendstimeline': feedFixture('feed_friends.json'),
+    })
+    try {
+      const r = await cli('weibo', 'feed', 'list', '--limit', '1')
+      expect(r.code).toBe(0)
+      expect(r.env).toMatchObject({ ok: true, platform: 'weibo', resource: 'feed', action: 'list', account: 'default', error: null })
+      expect(r.env.data[0]).toMatchObject({ id: '5369000000000000', kind: 'video' })
+      expect(r.env.page.has_more).toBe(true)
+
+      const r2 = await cli('weibo', 'feed', 'list', '--kind', 'following', '-o', 'jsonl')
+      expect(r2.code).toBe(0)
+      expect(r2.stdout.split('\n').filter(Boolean)).toHaveLength(1)
+    } finally {
+      m.restore()
+    }
+  })
+})
+
+// ---------------------------------------------------------------- keyword hot：非上游，没有对拍；fixture 由真机响应裁剪，词换成了占位词
+
+describe('weibo keyword hot（非上游，fixture）', () => {
+  useTempHome()
+
+  it('按榜单顺序输出 Keyword，去掉广告位，不收置顶词', async () => {
+    const m = mockFeed({ '/ajax/side/hotSearch': feedFixture('hot_search.json') })
+    try {
+      const result = await cmd.keywordHot(loggedCtx())
+      expect(m.calls.map((c) => c.url)).toEqual(['https://weibo.com/ajax/side/hotSearch'])
+      expect(result).toEqual([
+        { text: '热搜一', heat: 1152710 },
+        { text: '热搜二', heat: 807411 },
+        { text: '热搜三', heat: 674425 },
+      ])
+      expect((result[1] as any)[RAW]).toMatchObject({ label_name: '新' })
+    } finally {
+      m.restore()
+    }
+  })
+
+  it('CLI：登录后输出信封；注册表标注非上游', async () => {
+    const cred = newCredential({ platform: 'weibo', endpoint: 'web', account: 'default', method: 'cookie' })
+    cred.scopes.main!.cookies = parseCookieInput(COOKIES, '.weibo.com')
+    await writeCredential(cred)
+    await setCurrent('weibo', 'web', 'default')
+    const m = mockFeed({ '/ajax/side/hotSearch': feedFixture('hot_search.json') })
+    try {
+      const r = await cli('weibo', 'keyword', 'hot')
+      expect(r.code).toBe(0)
+      expect(r.env).toMatchObject({ ok: true, platform: 'weibo', resource: 'keyword', action: 'hot', error: null })
+      expect(r.env.data.map((k: any) => k.text)).toEqual(['热搜一', '热搜二', '热搜三'])
+    } finally {
+      m.restore()
+    }
+    const p = await cli('platforms', 'weibo')
+    expect(p.env.data.commands).toContainEqual(expect.objectContaining({ resource: 'keyword', action: 'hot', status: 'implemented', upstream: 'partial', note: expect.stringContaining('非上游') }))
   })
 })

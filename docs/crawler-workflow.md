@@ -141,7 +141,7 @@ CatBus 的归一化 `Item.stats` 只有播放/点赞/评论/收藏/转发，投�
 - B站 hot 只支持 popular；ranking 未接入 CatBus。
 - 微博没有 CatBus 热榜；微博搜索只有第一页；微博评论只有一级。
 - 适配器不维护 CatBus 侧的 cursor。一次 `run` 会尽量取到目标条数，详情失败记在 `warnings` / `status` 里；采析绘的去重账本负责跨运行去重，断点续传仍以采析绘自己的 cursor 为准。
-- `--raw` 的字段形状来自 CatBus 0.3.0 的上游接口（同步基线 `cv-cat/catbus` `87dfce4`，其 CI 全绿）。上游字段变化时先更新 CatBus 的移植和测试，再更新这里的映射。
+- `--raw` 的字段形状来自同步基线 `cv-cat/catbus` `419e030`（WebUI 合并前，上游自 2026-11-16 起 master 的 CI 基础设施故障，见第 7 节）的上游接口；更早期基线是 0.3.0 的 `87dfce4`（CI 全绿）。上游字段变化时先更新 CatBus 的移植和测试，再更新这里的映射。
 - CatBus 的 cookie 导入只认 `expirationDate` / `expires`，不认 Selenium 导出的 `expiry`；`httpOnly` / `sameSite` / `secure` 也不会保留。不要直接把 Selenium 的 cookie 文件喂给 CatBus。
 
 ## 7. 同步上游
@@ -155,7 +155,7 @@ npm run sync:upstream -- --crawler-workflow <采析绘仓库目录> --push   # �
 
 脚本（`scripts/sync-upstream.mjs`）的规则：
 
-1. `git fetch upstream` 后从 `upstream/master` 由新到旧找提交；用 `gh run list` 看该提交的**每一条** workflow——有失败、取消或还在跑的都跳过，取最新的全部完成且没有失败的版本。截至本次同步，最新提交 `ee20285`（YouTube）CI 是红的，因此停在 `87dfce4`（0.3.0）。
+1. `git fetch upstream` 后从 `upstream/master` 由新到旧找提交；用 `gh run list` 看该提交的**每一条** workflow——有失败、取消或还在跑的都跳过，取最新的全部完成且没有失败的版本。截至 0.3.0 同步时，`ee20285`（YouTube）CI 是红的，因此停在 `87dfce4`（0.3.0）。本次同步时上游自 2026-11-16 起 master 的 `ci` / `docker` 全部约 2 秒失败且无步骤（基础设施故障），最后一个「全绿且仍在历史里」的提交仍是 `87dfce4`；经人工确认后取 WebUI 合并前的 `419e030`，跳过 WebUI 大改动，并靠本地完整验证与采析绘集成测试把关。脚本的 `latestGreen` 规则不变，CI 恢复后仍按规则自动取最新全绿提交。
 2. `git merge --no-commit` 合并，然后 `npm ci` → `npm run build` → `npm test` → `node scripts/audit-mutating.mjs`；给了 `--crawler-workflow` 时还会用 `CATBUS_HOME=<本仓库>` 跑采析绘的 `tests/integration/test_catbus_adapter.py`。
 3. 任何一步失败就 `git merge --abort`，不留下坏提交；全部通过才提交，`--push` 才推送。
 4. 冲突不自动解决：脚本会停下并保留冲突现场，按 `docs/crawler-workflow.md` 的平台映射与 `mutating` 约定人工处理后重跑。

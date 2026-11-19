@@ -1,5 +1,5 @@
 import * as n from '../../../core/normalize.js'
-import type { Comment, Event, Item, ItemStatus, Live, User, UserRef } from '../../../core/schemas.js'
+import type { Comment, Event, Item, ItemStatus, Live, Media, User, UserRef } from '../../../core/schemas.js'
 
 /** B 站原始对象 → 归一化类型（AGENTS 6.2）。 */
 
@@ -8,9 +8,13 @@ export const spaceUrl = (mid: unknown) => `https://space.bilibili.com/${mid}`
 export const liveUrl = (room: unknown) => `https://live.bilibili.com/${room}`
 export const articleUrl = (cvid: unknown) => `https://www.bilibili.com/read/cv${cvid}`
 
-export function ref(mid: unknown, name: unknown): UserRef | null {
-  return n.userRef({ id: mid, name, url: mid == null || mid === '' ? null : spaceUrl(mid) })
+/** face：原始对象里的头像（owner.face、member.avatar、upic 等），没有时不给。 */
+export function ref(mid: unknown, name: unknown, face?: unknown): UserRef | null {
+  return n.userRef({ id: mid, name, url: mid == null || mid === '' ? null : spaceUrl(mid), avatar: face })
 }
+
+/** 直播间事件里新版的用户信息（uinfo.base.face）。 */
+const uface = (u: any) => u?.base?.face
 
 /** 稿件详情（x/web-interface/wbi/view 的 data）。 */
 export function video(v: any): Item {
@@ -21,9 +25,10 @@ export function video(v: any): Item {
       url: videoUrl(v.bvid),
       title: n.str(v.title),
       text: n.str(v.desc),
-      author: ref(v.owner?.mid, v.owner?.name),
+      author: ref(v.owner?.mid, v.owner?.name, v.owner?.face),
       created_at: n.time(v.pubdate),
       cover: n.url(v.pic),
+      media: videoMedia(v.duration, v.dimension),
       stats: {
         views: n.count(v.stat?.view),
         likes: n.count(v.stat?.like),
@@ -36,6 +41,29 @@ export function video(v: any): Item {
   )
 }
 
+/**
+ * 列表接口只给时长、不给播放地址：放一条 url 为 null 的视频 Media，让调用方知道这是多长的视频（AGENTS.md 6.2 的 Media）。
+ * 时长有秒数（view、popular、推荐流、收藏夹、稿件管理）和「mm:ss」/「h:mm:ss」文本（搜索、空间投稿、关注动态）两种。
+ */
+export function durationOf(value: unknown): number | null {
+  if (typeof value === 'string' && value.includes(':')) {
+    const parts = value.split(':').map(Number)
+    if (parts.some((x) => !Number.isFinite(x) || x < 0)) return null
+    return parts.reduce((acc, x) => acc * 60 + x, 0) || null
+  }
+  const sec = n.seconds(value)
+  return sec && sec > 0 ? sec : null
+}
+function videoMedia(duration: unknown, dim?: any): Media[] {
+  const d = durationOf(duration)
+  if (!d) return []
+  // dimension 的 rotate 为 1 时宽高对调
+  const rotate = Number(dim?.rotate) === 1
+  const w = n.count(rotate ? dim?.height : dim?.width) || null
+  const h = n.count(rotate ? dim?.width : dim?.height) || null
+  return [n.media({ id: null, type: 'video', url: null, width: w, height: h, duration: d })]
+}
+
 /** 搜索结果里的视频卡片。 */
 export function searchVideo(v: any): Item {
   return n.item(
@@ -45,9 +73,10 @@ export function searchVideo(v: any): Item {
       url: videoUrl(v.bvid),
       title: n.plainText(v.title),
       text: n.str(v.description),
-      author: ref(v.mid, v.author),
+      author: ref(v.mid, v.author, v.upic),
       created_at: n.time(v.pubdate),
       cover: n.url(v.pic),
+      media: videoMedia(v.duration),
       stats: { views: n.count(v.play), likes: n.count(v.like), comments: n.count(v.review), collects: n.count(v.favorites) },
     },
     v,
@@ -80,7 +109,7 @@ export function articleDraft(v: any, id: string, mid: string): Item {
       kind: 'article',
       title: n.str(v.title),
       text: n.str(v.content),
-      author: ref(v.author?.mid ?? mid, v.author?.name),
+      author: ref(v.author?.mid ?? mid, v.author?.name, v.author?.face),
       created_at: n.time(v.ctime ?? v.mtime),
       cover: n.url(v.banner_url || v.image_urls?.[0]),
       status: 'draft',
@@ -101,6 +130,7 @@ export function spaceVideo(v: any): Item {
       author: ref(v.mid, v.author),
       created_at: n.time(v.created),
       cover: n.url(v.pic),
+      media: videoMedia(v.length),
       stats: { views: n.count(v.play), comments: n.count(v.comment) },
     },
     v,
@@ -115,9 +145,10 @@ export function feedVideo(v: any): Item {
       kind: 'video',
       url: videoUrl(v.bvid),
       title: n.str(v.title),
-      author: ref(v.owner?.mid, v.owner?.name),
+      author: ref(v.owner?.mid, v.owner?.name, v.owner?.face),
       created_at: n.time(v.pubdate),
       cover: n.url(v.pic),
+      media: videoMedia(v.duration),
       stats: { views: n.count(v.stat?.view), likes: n.count(v.stat?.like) },
     },
     v,
@@ -141,9 +172,10 @@ export function followingVideo(v: any): Item | null {
       url: videoUrl(a.bvid),
       title: n.str(a.title),
       text: n.str(a.desc),
-      author: ref(au?.mid, au?.name),
+      author: ref(au?.mid, au?.name, au?.face),
       created_at: n.time(au?.pub_ts),
       cover: n.url(a.cover),
+      media: videoMedia(a.duration_text),
       stats: {
         views: n.count(a.stat?.play),
         likes: n.count(st?.like?.count),
@@ -165,9 +197,10 @@ export function favVideo(v: any): Item {
       url: v.bvid ? videoUrl(v.bvid) : null,
       title: n.str(v.title),
       text: n.str(v.intro),
-      author: ref(v.upper?.mid, v.upper?.name),
+      author: ref(v.upper?.mid, v.upper?.name, v.upper?.face),
       created_at: n.time(v.pubtime),
       cover: n.url(v.cover),
+      media: videoMedia(v.duration),
       stats: { views: n.count(v.cnt_info?.play), collects: n.count(v.cnt_info?.collect) },
     },
     v,
@@ -196,6 +229,7 @@ export function archive(v: any): Item {
       author: ref(a.mid, a.author),
       created_at: n.time(a.ptime || a.ctime),
       cover: n.url(a.cover),
+      media: videoMedia(a.duration, a.dimension),
       stats: {
         views: n.count(v.stat?.view),
         likes: n.count(v.stat?.like),
@@ -234,14 +268,25 @@ export function navUser(v: any): User {
   return n.user({ id: n.id(v.mid), name: n.str(v.uname), avatar: n.url(v.face), url: spaceUrl(v.mid) }, v)
 }
 
+/** 评论附带的图片：`content.pictures[i]` 的 `img_src`（宽高有时缺）。正文里的 `[表情]` 在 `content.emote` 里，仍算文本。 */
+function replyPictures(list: unknown): Media[] {
+  const out: Media[] = []
+  for (const p of Array.isArray(list) ? (list as any[]) : []) {
+    const url = n.url(p?.img_src)
+    if (url) out.push(n.media({ id: null, type: 'image', url, width: n.count(p.img_width), height: n.count(p.img_height) }, p))
+  }
+  return out
+}
+
 export function reply(v: any, itemId: string): Comment {
   return n.comment(
     {
       id: n.id(v.rpid),
       item_id: itemId,
       parent_id: v.parent ? n.id(v.parent) : null,
-      author: ref(v.member?.mid, v.member?.uname),
+      author: ref(v.member?.mid, v.member?.uname, v.member?.avatar),
       text: String(v.content?.message ?? ''),
+      media: replyPictures(v.content?.pictures),
       created_at: n.time(v.ctime),
       stats: { likes: n.count(v.like), replies: n.count(v.rcount) },
     },
@@ -256,8 +301,24 @@ export function searchLive(v: any): Live {
       url: liveUrl(v.roomid),
       title: n.plainText(v.title),
       status: v.live_status === 1 ? 'live' : 'offline',
-      host: ref(v.uid, v.uname),
+      host: ref(v.uid, v.uname, v.uface),
       cover: n.url(v.user_cover || v.cover),
+      stats: { viewers: n.count(v.online) },
+    },
+    v,
+  )
+}
+
+/** 直播首页推荐（getListV2）和分区列表（second/getList）里的直播间：只列正在直播的，没有 live_status 字段。 */
+export function listLive(v: any): Live {
+  return n.live(
+    {
+      id: n.id(v.roomid),
+      url: liveUrl(v.roomid),
+      title: n.str(v.title),
+      status: v.live_status == null || v.live_status === 1 ? 'live' : 'offline',
+      host: ref(v.uid, v.uname, v.face),
+      cover: n.url(v.user_cover || v.cover || v.system_cover),
       stats: { viewers: n.count(v.online) },
     },
     v,
@@ -295,34 +356,44 @@ export function liveEvent(msg: any): Event {
   switch (cmd) {
     case 'DANMU_MSG': {
       const info = msg.info ?? []
-      return n.event({ type: 'chat', time: n.time(info[0]?.[4]) ?? undefined, user: ref(info[2]?.[0], info[2]?.[1]), text: String(info[1] ?? '') }, msg)
+      return n.event({ type: 'chat', time: n.time(info[0]?.[4]) ?? undefined, user: ref(info[2]?.[0], info[2]?.[1], uface(info[0]?.[15]?.user)), text: String(info[1] ?? '') }, msg)
     }
     case 'SUPER_CHAT_MESSAGE':
-      return n.event({ type: 'chat', time: n.time(d.start_time) ?? undefined, user: ref(d.uid, d.user_info?.uname), text: n.str(d.message) }, msg)
+      return n.event({ type: 'chat', time: n.time(d.start_time) ?? undefined, user: ref(d.uid, d.user_info?.uname, d.user_info?.face), text: n.str(d.message) }, msg)
     case 'SEND_GIFT':
       return n.event(
-        { type: 'gift', time: n.time(d.timestamp) ?? undefined, user: ref(d.uid, d.uname), gift: { name: String(d.giftName ?? ''), count: Number(d.num ?? 1) } },
+        { type: 'gift', time: n.time(d.timestamp) ?? undefined, user: ref(d.uid, d.uname, d.face ?? uface(d.sender_uinfo)), gift: { name: String(d.giftName ?? ''), count: Number(d.num ?? 1) } },
         msg,
       )
     case 'INTERACT_WORD': {
       const type = INTERACT_TYPE[Number(d.msg_type)] ?? 'other'
       const text = type !== 'other' ? undefined : Number(d.msg_type) === 3 ? '分享直播间' : cmd
-      return n.event({ type, time: n.time(d.timestamp) ?? undefined, user: ref(d.uid, d.uname), text }, msg)
+      return n.event({ type, time: n.time(d.timestamp) ?? undefined, user: ref(d.uid, d.uname, uface(d.uinfo)), text }, msg)
     }
     case 'LIKE_INFO_V3_CLICK':
-      return n.event({ type: 'like', user: ref(d.uid, d.uname) }, msg)
+      return n.event({ type: 'like', user: ref(d.uid, d.uname, uface(d.uinfo)) }, msg)
+    // 直播间实时数据：在线人数（高能榜人数，新版带 online_count）、累计点赞数
+    case 'ONLINE_RANK_COUNT': {
+      const viewers = n.count(d.online_count) ?? n.count(d.count)
+      const label = n.str(d.online_count_text) ?? n.str(d.count_text) ?? (viewers != null ? String(viewers) : null)
+      return n.event({ type: 'other', text: label ? `在线 ${label}` : cmd, stats: viewers != null ? { viewers, likes: null } : null }, msg)
+    }
+    case 'LIKE_INFO_V3_UPDATE': {
+      const likes = n.count(d.click_count)
+      return n.event({ type: 'other', text: likes != null ? `点赞 ${likes}` : cmd, stats: likes != null ? { viewers: null, likes } : null }, msg)
+    }
     case 'GUARD_BUY':
       return n.event(
-        { type: 'gift', time: n.time(d.start_time) ?? undefined, user: ref(d.uid, d.username), gift: { name: String(d.gift_name ?? ''), count: Number(d.num ?? 1) } },
+        { type: 'gift', time: n.time(d.start_time) ?? undefined, user: ref(d.uid, d.username, uface(d.sender_uinfo)), gift: { name: String(d.gift_name ?? ''), count: Number(d.num ?? 1) } },
         msg,
       )
     default:
-      return n.event({ type: 'other', time: n.time(d.timestamp) ?? undefined, user: d.uid ? ref(d.uid, d.uname) : null, text: otherText(cmd, d) }, msg)
+      return n.event({ type: 'other', time: n.time(d.timestamp) ?? undefined, user: d.uid ? ref(d.uid, d.uname, uface(d.uinfo)) : null, text: otherText(cmd, d) }, msg)
   }
 }
 
 /** gethistory 的弹幕，timeline 是北京时间。 */
 export function historyEvent(v: any): Event {
   const t = typeof v.timeline === 'string' ? n.time(v.timeline.replace(' ', 'T') + '+08:00') : null
-  return n.event({ type: 'chat', time: t ?? undefined, user: ref(v.uid, v.nickname), text: n.str(v.text) }, v)
+  return n.event({ type: 'chat', time: t ?? undefined, user: ref(v.uid, v.nickname, uface(v.user)), text: n.str(v.text) }, v)
 }

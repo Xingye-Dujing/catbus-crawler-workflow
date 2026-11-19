@@ -7,7 +7,12 @@ export interface UserRef {
   id: string
   name: string | null
   url: string | null
+  /** 头像：https 绝对地址；取不到时为 null。 */
+  avatar: string | null
 }
+
+/** 账号的用户：字段与 UserRef 相同，只用于 Account、AuthStatus 与凭证文件（AGENTS 6.2）。 */
+export type AccountUser = UserRef
 
 export interface Price {
   amount: number
@@ -83,6 +88,8 @@ export interface Comment {
   parent_id: string | null
   author: UserRef | null
   text: string
+  /** 评论附带的图片、表情包、商品评价的晒图；没有时为 []。 */
+  media: Media[]
   created_at: string | null
   stats: { likes: number | null; replies: number | null }
 }
@@ -136,6 +143,8 @@ export interface Event {
   user: UserRef | null
   text: string | null
   gift: { name: string; count: number } | null
+  /** 直播间实时数据（在线人数、累计点赞），消息不带时为 null */
+  stats: { viewers: number | null; likes: number | null } | null
 }
 
 export interface Gift {
@@ -188,7 +197,7 @@ export interface NoticeCount {
 
 export interface AuthStatus {
   logged_in: boolean
-  user: UserRef | null
+  user: AccountUser | null
   method: string | null
   expires_at: string | null
 }
@@ -198,14 +207,15 @@ export interface Account {
   endpoint: string
   account: string
   current: boolean
-  user: UserRef | null
+  user: AccountUser | null
   method: string | null
   updated_at: string | null
 }
 
 export interface File {
   path: string
-  type: 'image' | 'video' | 'audio' | 'torrent'
+  /** `data` 是 `item download --meta` 写出的帖子信息与评论（ExportDoc，见 core/export.ts）。 */
+  type: 'image' | 'video' | 'audio' | 'torrent' | 'data'
   url: string | null
   size: number
 }
@@ -265,6 +275,10 @@ export interface Ticket {
   url: string
   train_no: string
   type: string
+  /** 本车次的始发站 */
+  start: { code: string; name: string }
+  /** 本车次的终到站 */
+  end: { code: string; name: string }
   from: TicketStation
   to: TicketStation
   depart: string
@@ -342,7 +356,13 @@ export function withRaw<T extends object>(value: T, raw: unknown): T {
 
 // ---- 凭证文件（AGENTS 5.4） ----
 
-const UserRefSchema = z.object({ id: z.string(), name: z.string().nullable(), url: z.string().nullable() })
+// 旧凭证文件的 user 没有 avatar，读成 null（不需要迁移）
+const AccountUserSchema = z.object({
+  id: z.string(),
+  name: z.string().nullable(),
+  url: z.string().nullable(),
+  avatar: z.string().nullable().default(null),
+})
 
 const CookieSchema = z.object({
   name: z.string(),
@@ -363,7 +383,7 @@ export const CredentialSchema = z.object({
   platform: z.string(),
   endpoint: z.enum(['web', 'app', 'pc']),
   account: z.string(),
-  user: UserRefSchema.nullable(),
+  user: AccountUserSchema.nullable(),
   method: z.enum([...LOGIN_METHODS, 'guest']),
   created_at: z.string(),
   updated_at: z.string(),

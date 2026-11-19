@@ -21,7 +21,7 @@ export async function authLogin(ctx: Ctx) {
   const w = new Weibo(loginContext(ctx, credential))
   const self = await api.selfInfo(w)
   if (!self) throw new CatbusError('AUTH_REQUIRED', '登录没有成功：cookie 无效或已过期', { hint: '在浏览器登录 weibo.com 后，复制请求头里完整的 Cookie' })
-  return finishLogin(ctx, credential, { id: self.uid, name: n.str(self.nick), url: norm.userUrl(self.uid) })
+  return finishLogin(ctx, credential, { id: self.uid, name: n.str(self.nick), url: norm.userUrl(self.uid), avatar: self.avatar })
 }
 
 /** 登录态的过期时间：cookie ALF 是 SUB 的过期秒数（可能带 `02_` 前缀）。 */
@@ -37,7 +37,7 @@ export async function authStatus(ctx: Ctx): Promise<AuthStatus> {
   const self = w.isLogin ? await api.selfInfo(w) : null
   return {
     logged_in: Boolean(self),
-    user: self ? n.userRef({ id: self.uid, name: self.nick, url: norm.userUrl(self.uid) }) : null,
+    user: self ? n.accountUser(n.userRef({ id: self.uid, name: self.nick, url: norm.userUrl(self.uid) }), self.avatar) : null,
     method: self ? ctx.credential.method : null,
     expires_at: self ? expiresAt(w) : null,
   }
@@ -172,6 +172,43 @@ async function uploadVideoFile(w: Weibo, data: Uint8Array, waitOutput: boolean):
     }
   }
   return mediaId
+}
+
+// ================================================================ feed
+
+/**
+ * 推荐流（hottimeline）与关注流（friendstimeline）来自 weibo.com 网页版自己的接口，上游没有
+ * （AGENTS 7.5 的无上游命令，测试用真机响应裁剪的 fixture 回放）。都需要登录。
+ * 推荐：cursor 是上一页响应里的 since_id 对象（JSON 原样回传）；关注：cursor 是上一页的 max_id。
+ */
+export async function feedList(ctx: Ctx) {
+  const w = new Weibo(ctx)
+  w.requireLogin()
+  const kind = (ctx.options as Record<string, any>).kind ?? 'recommend'
+  if (kind === 'following') {
+    const body = await api.feedFollowing(w, ctx.cursor ?? null)
+    const next = n.str(body.max_id)
+    const list = ((body.statuses ?? []) as any[]).filter((m) => !m.mblogtype || m.mblogtype === 0)
+    return paged(list.map((m) => norm.mblog(m)), next, Boolean(next && next !== '0' && list.length))
+  }
+  // recommend（hot 是同一条流）。cursor 是上一页响应里的 since_id 对象的 JSON 原文（紧凑），翻页时原样回传
+  const body = await api.feedRecommend(w, ctx.cursor ?? null)
+  const sid = body.since_id
+  const next = sid == null ? null : typeof sid === 'object' ? JSON.stringify(sid) : n.str(sid)
+  const list = ((body.statuses ?? []) as any[]).filter((m) => !m.mblogtype || m.mblogtype === 0)
+  return paged(list.map((m) => norm.mblog(m)), next, Boolean(next && list.length))
+}
+
+// ================================================================ keyword
+
+/** 热搜榜（非上游，见 api.hotSearch）：按榜单顺序，去掉广告位；置顶词（hotgov）没有热度，不收。 */
+export async function keywordHot(ctx: Ctx) {
+  const w = new Weibo(ctx)
+  const body = await api.hotSearch(w)
+  return ((body.data?.realtime ?? []) as any[])
+    .filter((x) => !x?.is_ad)
+    .map((x) => n.keyword({ text: String(x?.word || x?.note || ''), heat: n.count(x?.num) }, x))
+    .filter((k) => k.text)
 }
 
 // ================================================================ comment

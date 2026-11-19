@@ -12,8 +12,8 @@ const first = (o: any, ...keys: string[]): any => {
   return undefined
 }
 
-export function ref(id: unknown, name: unknown): UserRef | null {
-  return n.userRef({ id, name, url: id == null || id === '' ? null : profileUrl(id) })
+export function ref(id: unknown, name: unknown, avatar?: unknown): UserRef | null {
+  return n.userRef({ id, name, url: id == null || id === '' ? null : profileUrl(id), avatar })
 }
 
 /** 取 URL：字符串，或 [{url}] / [{cdn,url}] 列表的第一个。 */
@@ -65,7 +65,7 @@ export function feed(v: any, authorFallback?: any): Item {
       kind: images.length ? 'image' : 'video',
       url: photoUrl(id),
       text: n.str(first(photo, 'caption', 'originCaption')),
-      author: ref(first(author, 'id', 'authorId', 'user_id', 'eid'), first(author, 'name', 'user_name', 'nickname')),
+      author: ref(first(author, 'id', 'authorId', 'user_id', 'eid'), first(author, 'name', 'user_name', 'nickname'), first(author, 'headerUrl', 'headurl', 'avatar', 'userHead')),
       created_at: n.time(first(photo, 'timestamp', 'create_time')),
       cover: urlOf(first(photo, 'coverUrl', 'coverUrls')),
       media: photoMedia(photo),
@@ -143,7 +143,7 @@ export function comment(v: any, itemId: string, parentId: string | null = null):
       id: n.id(v.commentId ?? v.comment_id),
       item_id: itemId,
       parent_id: parentId,
-      author: ref(first(v, 'authorEid', 'authorId', 'author_id'), first(v, 'authorName', 'author_name')),
+      author: ref(first(v, 'authorEid', 'authorId', 'author_id'), first(v, 'authorName', 'author_name'), first(v, 'headurl', 'headerUrl', 'authorHead')),
       text: String(v.content ?? ''),
       created_at: n.time(v.timestamp),
       stats: { likes: n.count(first(v, 'realLikedCount', 'likedCount')), replies: n.count(first(v, 'subCommentCount')) ?? (v.hasSubComments ? null : 0) },
@@ -161,13 +161,49 @@ export function liveRoom(v: any): Live {
       id: eid,
       url: liveUrl(eid),
       title: n.str(v.caption),
-      status: v.living || author.living ? 'live' : 'offline',
-      host: n.userRef({ id: eid, name: author.name, url: liveUrl(eid) }),
+      // 直播首页、livedetail 给出的 living 实测恒为 false；有直播流 id（liveStreamId）就是在播
+      status: v.id || v.living || author.living ? 'live' : 'offline',
+      host: n.userRef({ id: eid, name: author.name, url: liveUrl(eid), avatar: first(author, 'avatar', 'headerUrl', 'headurl') }),
       cover: n.url(v.poster),
       stats: { viewers: n.count(v.watchingCount) },
     },
     v,
   )
+}
+
+/**
+ * livedetail 的 data → 与直播首页条目同形的直播间（id 为 liveStreamId，没开播时没有 id）。
+ * 接口不给标题和在线人数，由调用方用首页快照补上。
+ */
+export function detailRoom(d: any, eid: string): any {
+  const ls = d?.liveStream ?? {}
+  const a = d?.author ?? {}
+  return {
+    id: ls.id ? String(ls.id) : undefined,
+    caption: ls.caption ?? null,
+    poster: ls.id ? (ls.poster ?? null) : null,
+    watchingCount: ls.watchingCount ?? null,
+    living: Boolean(ls.id),
+    author: { id: a.id ?? eid, name: a.name, avatar: a.avatar, living: Boolean(ls.id) },
+    playUrls: ls.playUrls ?? null,
+    hlsPlayUrl: ls.hlsPlayUrl ?? null,
+  }
+}
+
+/** 直播流（livedetail 的 playUrls）→ Media[]：每个编码、每档清晰度一条 flv，再加一条 hls。没开播时为空数组。 */
+export function liveStreams(room: any): Media[] {
+  const out: Media[] = []
+  for (const [codec, v] of Object.entries<any>(room?.playUrls ?? {})) {
+    for (const r of v?.adaptationSet?.representation ?? []) {
+      const url = n.url(r?.url)
+      if (!url) continue
+      const quality = String(r.qualityType ?? r.id ?? '').toLowerCase()
+      out.push(n.media({ id: `${codec === 'h264' ? '' : `${codec}-`}${quality}.flv`, type: 'video', url }, r))
+    }
+  }
+  const hls = n.url(room?.hlsPlayUrl)
+  if (hls) out.push(n.media({ id: 'hls', type: 'video', url: hls }, { hlsPlayUrl: room.hlsPlayUrl }))
+  return out
 }
 
 /** 直播回放列表。 */

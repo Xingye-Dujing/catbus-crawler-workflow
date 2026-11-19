@@ -1,3 +1,4 @@
+import * as n from '../../../core/normalize.js'
 import { type Category, type Item, type Media, type Poi, type Price, type UserRef, withRaw } from '../../../core/schemas.js'
 import type { City } from './resolve.js'
 
@@ -31,7 +32,7 @@ function price(v: unknown): Price | null {
 }
 
 function performer(c: any): UserRef | null {
-  return c?.celebrityId != null ? { id: String(c.celebrityId), name: c.celebrityName ?? null, url: null } : null
+  return c?.celebrityId != null ? n.userRef({ id: c.celebrityId, name: c.celebrityName, url: null, avatar: c.headUrl }) : null
 }
 
 /** 场次、场馆、售卖状态没有对应的 Item 字段，按「键：值」逐行写进 text；原始字段用 --raw。 */
@@ -54,6 +55,7 @@ export function showItem(r: any): Item {
         ['分类', r.categoryName],
         ['演出者', performers.join('、')],
         ['开售', r.onSaleTimeDisplay],
+        ['开售时间', n.time(r.onSaleTime)],
       ]),
       author: performer(r.celebrityVOList?.[0]),
       created_at: null,
@@ -79,21 +81,33 @@ function detailImages(html: unknown): Media[] {
   }))
 }
 
-/** 场次一行，票档各一行。`--tickets` 用，不显示的票档（shouldDisplay 为 false）跳过。 */
+/**
+ * 场次一行（有开始时间时下一行是「场次时间：<ISO>」），票档各一行。`--tickets` 用，
+ * 不显示的票档（shouldDisplay 为 false）跳过。票档行依次是名称、票面价、实售价、余票、每单限购、售罄，
+ * 取不到的项省略。
+ */
 function showLines(shows: any[]): string[] {
-  return shows.flatMap((s) => [
-    `场次：${s.showName ?? s.showId}`,
-    ...(s.tickets ?? [])
-      .filter((t: any) => t.shouldDisplay !== false)
-      .map((t: any) => {
-        const parts = [t.ticketName ?? t.ticketId]
-        const sell = t.ticketPriceVO?.sellPrice
-        if (sell != null) parts.push(`实售价 ${sell}`)
-        if (t.remainingStock != null) parts.push(`余票 ${t.remainingStock}`)
-        if (t.showStatus === 2) parts.push('售罄')
-        return `票档：${parts.join('，')}`
-      }),
-  ])
+  return shows.flatMap((s) => {
+    const start = n.time(s.startTime)
+    return [
+      `场次：${s.showName ?? s.showId}`,
+      ...(start ? [`场次时间：${start}`] : []),
+      ...(s.tickets ?? [])
+        .filter((t: any) => t.shouldDisplay !== false)
+        .map((t: any) => {
+          const parts = [t.ticketName ?? t.ticketId]
+          const face = t.ticketPriceVO?.ticketPrice
+          const sell = t.ticketPriceVO?.sellPrice
+          const limit = t.ticketBuyLimitVO?.maxBuyLimit
+          if (face != null) parts.push(`票面价 ${face}`)
+          if (sell != null) parts.push(`实售价 ${sell}`)
+          if (t.remainingStock != null) parts.push(`余票 ${t.remainingStock}`)
+          if (limit != null && Number(limit) > 0) parts.push(`限购 ${limit}`)
+          if (t.showStatus === 2) parts.push('售罄')
+          return `票档：${parts.join('，')}`
+        }),
+    ]
+  })
 }
 
 /** project/detail 的 data；`shows` 是 `--tickets` 查到的场次和票档，放进原始对象。 */
@@ -116,6 +130,7 @@ export function detailItem(d: any, shows?: any[]): Item {
             ['场馆', venue],
             ['票价', (d.priceVO?.sellPriceList ?? []).join('、')],
             ['状态', b.buttonContext?.message],
+            ['开售时间', n.time(d.saleRemindVO?.onSaleTime)],
           ]),
           ...showLines(shows ?? []),
         ]

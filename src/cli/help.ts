@@ -29,9 +29,11 @@ function table(rows: string[][], indent = '  '): string {
 
 const GLOBAL_OPTIONS = [
   ['-a, --account <name>', '使用哪个账号'],
-  ['-e, --endpoint <端>', 'web | app | pc，默认 web'],
+  ['-e, --endpoint <端>', 'web | app | pc，省略时用平台的默认端'],
   ['-o, --output <格式>', 'json | jsonl，默认 json'],
   ['    --raw', '用平台原始对象代替归一化对象'],
+  ['    --fields <路径,...>', '只输出这些字段，如 id,url,author.name'],
+  ['    --dry-run', '只校验参数、选项和登录态，不执行'],
   ['    --proxy <url>', '本次调用使用的代理'],
   ['-v, --verbose', '在 stderr 输出调试日志（已脱敏）'],
   ['-q, --quiet', '不输出提示和进度，只保留错误'],
@@ -60,6 +62,7 @@ export function rootHelp(): string {
       ['auth list', '所有平台、所有端的账号'],
       ['config get|set|unset|list', '读写配置（~/.catbus/config.toml）'],
       ['version', '版本、Node 版本、系统与架构'],
+      ['tui', '全屏交互界面（需要交互式终端）'],
     ]),
     '',
     '全局选项:',
@@ -76,7 +79,10 @@ export function rootHelp(): string {
 }
 
 function endpointsLine(platform: Platform): string {
-  return ENDPOINTS.map((e) => (platform.endpoints[e] === 'planned' ? `${e} ○ planned` : `${e} ✓`)).join(' · ')
+  return ENDPOINTS.map((e) => {
+    const ep = platform.endpoints[e]
+    return ep === 'planned' ? `${e} ○ planned` : `${e}${ep.label ? `（${ep.label}）` : ''} ✓${e !== 'web' && e === platform.defaultEndpoint ? ' 默认' : ''}`
+  }).join(' · ')
 }
 
 function title(platform: Platform): string {
@@ -84,13 +90,13 @@ function title(platform: Platform): string {
   return `${platform.name} (${platform.id})${aliases}`
 }
 
-/** 请求的端还是 planned 时，列出 web 端的命令作参考。 */
+/** 请求的端还是 planned 时，列出平台默认端的命令作参考。 */
 function listedEndpoint(platform: Platform, endpoint: Endpoint): { ep: AvailableEndpoint; notice: string | null } {
   const ep = platform.endpoints[endpoint]
   if (ep !== 'planned') return { ep, notice: null }
   return {
-    ep: platform.endpoints.web as AvailableEndpoint,
-    notice: `${endpoint} 端尚未实现，所有命令都返回 NOT_IMPLEMENTED。下面是 web 端的命令。`,
+    ep: platform.endpoints[platform.defaultEndpoint] as AvailableEndpoint,
+    notice: `${endpoint} 端尚未实现，所有命令都返回 NOT_IMPLEMENTED。下面是 ${platform.defaultEndpoint} 端的命令。`,
   }
 }
 
@@ -145,7 +151,7 @@ function optionUsage(key: string, command: Command): string {
 
 export function commandHelp(platform: Platform, endpoint: Endpoint, command: Command): string {
   const p = platform.id
-  const e = endpoint === 'web' ? '' : ` -e ${endpoint}`
+  const e = endpoint === platform.defaultEndpoint ? '' : ` -e ${endpoint}`
   const argUsage = command.args.map((a) => (a.optional ? `[${a.name}]` : `<${a.name}>`))
   const optionKeys = Object.keys(command.options)
   const requiredOptions = optionKeys.filter((k) => describeOption(command.options[k]!).required)
@@ -153,7 +159,7 @@ export function commandHelp(platform: Platform, endpoint: Endpoint, command: Com
     const ep = platform.endpoints[name]
     if (ep === 'planned') return `${name} ○ planned`
     const c = ep.commands.get(command.key)
-    return !c ? `${name} —` : c.status === 'planned' ? `${name} ○ planned` : `${name} ✓`
+    return !c ? `${name} —` : c.status === 'planned' ? `${name} ○ planned` : `${name}${ep.label ? `（${ep.label}）` : ''} ✓${name !== 'web' && name === platform.defaultEndpoint ? ' 默认' : ''}`
   })
   const confirm = command.confirm === true ? '危险操作，执行前需要确认；-y 跳过' : command.confirm ? '部分情况需要确认（见选项）；-y 跳过' : null
 
@@ -206,7 +212,7 @@ export const GLOBAL_HELP: Record<string, string> = {
   doctor: [
     '用法: catbus doctor',
     '',
-    '逐项检查运行环境：Node 版本、~/.catbus 权限、签名 vm、HTTP 库、canvas、onnx、京东模型包、OCR 模型包。',
+    '逐项检查运行环境：Node 版本、~/.catbus 权限、签名 vm、HTTP 库、canvas、onnx、终端界面（ink）、京东模型包、OCR 模型包。',
     '有检查项不通过时退出码为 1，data 里仍是完整的检查结果。',
   ].join('\n'),
   auth: [
@@ -228,9 +234,25 @@ export const GLOBAL_HELP: Record<string, string> = {
       ['proxy', '全局代理，例如 http://127.0.0.1:7890、socks5://127.0.0.1:1080'],
       ['timeout', '单次请求超时（秒），默认 30'],
       ['<platform>.proxy', '平台代理，例如 xhs.proxy'],
+      ['youtube.browser', 'YouTube 发布与删除用的本地 Chromium 可执行文件（绝对路径），见 AGENTS 5.7'],
+      ['discord.browser', 'Discord WebAuthn 用的本地 Chromium 可执行文件（绝对路径），见 AGENTS 5.10'],
     ]),
     '',
     '代理的优先级：--proxy > <platform>.proxy > proxy。不读取 HTTP(S)_PROXY 环境变量。',
+  ].join('\n'),
+  tui: [
+    '用法: catbus tui',
+    '',
+    '全屏交互界面：选平台、选命令、填参数、看结果。需要交互式终端（stdin 和 stdout 都是 TTY），至少 80 × 24。',
+    '界面里可以登录、切换账号，运行读取类命令和监听（直播弹幕、私信）；写入、删除、发布、下载请复制界面底部的等价命令到终端执行。',
+    '',
+    '环境变量:',
+    table([
+      ['CATBUS_TUI_THEME=light|dark', '强制浅色或深色配色（默认按 COLORFGBG 判断，没有就用深色）'],
+      ['CATBUS_TUI_ASCII=1', '用纯 ASCII 边框和标记（终端把 ● ○ │ 显示成两列宽时用）'],
+      ['CATBUS_TUI_ANIMATE=0|1', '吉祥物动画；Windows 默认关，其余系统默认开'],
+      ['NO_COLOR=1', '不使用颜色'],
+    ]),
   ].join('\n'),
   version: ['用法: catbus version（或 catbus --version）', '', '输出 catbus 版本、Node 版本、系统与架构。'].join('\n'),
 }

@@ -6,10 +6,51 @@
 
 ## [Unreleased]
 
+### Added
+
+- bilibili、weibo、douyin、kuaishou：`keyword hot`（热搜榜），输出 Keyword[]，`heat` 为热度值（快手的「1113.8万」换算成整数），按榜单顺序，不含置顶词。上游都没有热搜接口，请求按各自网页端补的，没有对拍：bilibili 是搜索框的 `x/web-interface/wbi/search/square`（最多 50 条）；weibo 是热搜榜 `ajax/side/hotSearch`（去掉广告位）；douyin 是热榜页的 `aweme/v1/web/hot/search/list`（不含实时上升热点）；kuaishou 是旧版网页端首页的 GraphQL `visionHotRank`（新版网页端已不展示热榜，接口随时可能下线）
+- 新增 `discord` 平台：按 macOS 桌面协议连接，默认使用 `pc` 端，支持扫码、账号密码及 Token 登录、服务器与频道、消息与附件、好友和表情回应、实时消息。支持人工验证码与通行密钥验证；旧版 web 登录信息会迁移至 pc。验证范围与限制见 `docs/platforms/discord.md`。
+- mteam：`item download --qbit` 的推送结果进入信封：成功时 `data` 为 `{id files qbit}`，`qbit.status` 为 `added` 或 `exists`（已在任务列表）；推送失败时报 `NETWORK` / `ERROR` / `UPSTREAM`，`error.detail` 为 `{qbit: "failed", id, files, http_status}`，列出已保存的种子文件。`bonus history` 的 `note` 去掉站点原文里的 IP 和 `[TID=…]` 等标记，促销、考核标签转成中文；`url` 改为相关种子的详情页（原来 `TRACKER` 记录总是 null）
+- `item download` 同时导出帖子信息和评论：`--meta` 在媒体文件旁边写 `<platform>_<id>.json`（`{schema platform exported_at item comments comments_truncated}`，`item` 与 `item get` 的输出相同）；`--comments <N|all>` 带上一级评论（隐含 `--meta`），`--replies <N|all>` 再带上每条评论的回复，自动翻页取满；`--no-media` 只写这个文件、不下载媒体。由 core 调用同一平台的 `item get` / `comment list` / `comment replies`，所有有 `item download` 的平台都支持；取评论中途遇到风控时停下、已取到的照样写出（`comments_truncated: true`），平台没有评论命令时 `comments` 为 `[]`。File.type 新增 `data`
+- maoyan：`feed list`、`item get` 的 `text` 多一行「开售时间：<带时区的 ISO 8601>」（取自接口的 `onSaleTime`）。原来只有「明天开售」这类相对文案，算不出距开售还有多久
+- maoyan：`item get --tickets` 的票档行加上票面价和每单限购（如「票档：A，票面价 1080，实售价 648，余票 3，限购 6」），每个场次后多一行「场次时间：<带时区的 ISO 8601>」（取自接口的 `startTime`）
+- 12306：Ticket 新增 `start{code name}`、`end{code name}`（本车次的始发站和终到站；`from.code` 与 `start.code` 相同表示在始发站上车，`to.code` 与 `end.code` 相同表示坐到终到站）；`transfer search` 每一段（TransferLeg）的 `url` 由 null 改为这一段的余票深链，日期是这一段的上车日期，接口没给电报码或日期时仍为 null
+- 全局选项 `--fields <路径,...>`：只输出 `data` 条目里的这些字段，点号进入嵌套对象，经过数组时作用到每个元素，没有的字段为 null；json、jsonl 都适用，在 `--raw` 之后生效
+- 全局选项 `--dry-run`：做完参数、选项、是否已实现、本地登录态的检查就停下，不调用平台接口；`data` 为 `{args options confirm}`，凭证类选项打码
+- UserRef 带上头像：作者、评论者、主播、观众、私信对方等所有 UserRef 改为 `id name url avatar`，`avatar` 从同一个原始对象里取（统一成 https，不额外请求），取不到时为 null。AccountUser 的字段与 UserRef 相同，类型名保留
+- 评论带上图片：Comment 新增 `media: Media[]`（评论附带的图片、表情包、商品评价的晒图；动图也记为 `image`，正文里的行内表情不算），取自同一个原始评论对象，不额外请求。xhs（`pictures`）、douyin / tiktok（`image_list`、`sticker`，商品评价的晒图）、bilibili（`content.pictures`）、weibo（`url_struct` / `pic_infos` / `pic`）、x（回复推文的 `extended_entities`）、jd（评价的 `pictureInfoList`）；kuaishou 的评论查询不返回图片、youtube 评论没有图片，为 `[]`
+- `item download --subdir none|id|title`：每条内容放进 `--dir` 下自己的子目录，默认 `none`（行为不变）。`title` 按标题命名（没有标题用正文开头，再没有用 ID），目录名去掉 emoji、平台表情码（如 `[笑哭R]`、`#话题[话题]#`）和 Windows / macOS / Linux 不允许的字符，避开 Windows 保留名，最长 60 个字符；同名目录里已有别的内容时加上 ID 后 6 位。文件名不变。支持所有有 `item download` 的平台（mteam 在 `title` 模式下多查一次种子详情取标题）
+- 账号带上头像：Account 与 AuthStatus 的 `user` 改为新类型 AccountUser（`id name url avatar`），凭证文件的 `user` 也保存 `avatar`。登录、cookie 导入和 `auth status` 复用流程里原有的那次当前用户请求取头像（统一成 https），不额外请求；`auth status` 拿到新的昵称 / 头像会写回凭证。旧凭证文件没有 `avatar` 时读成 null，不需要迁移。taobao、xianyu、jd、jimeng 的校验接口不给头像，为 null
+- bilibili：`series list`（我的合集）与 `series add <合集> <稿件>`（把已发布稿件加进合集，`x2/creative/web/season/section/episodes/add`）；`item publish` 新增私有选项 `--series <合集>`，发布后自动加进合集
+- 新增 `youtube`（YouTube，别名 `yt`）平台的 web 端。没有上游仓库，直接对接 YouTube 网页背后的 InnerTube 接口（`/youtubei/v1/`），接口说明见 `src/platforms/youtube/UPSTREAM`：
+  - 不登录可用：`item get` / `search`（`--sort general|popular`、`--time`、`--type`）/ `related` / `media` / `download`，`comment list` / `replies`，`user get` / `search` / `items`，`series list` / `items`（播放列表），`keyword suggest`，`live get` / `search` / `history` / `listen`（直播聊天）
+  - 需要登录：`feed list`（首页推荐、订阅流），`history list`，`notice list` / `count`，`user likes` / `collects`（稍后观看）/ `following`（只能看自己的），`item like` / `unlike` / `collect` / `uncollect`，`user follow` / `unfollow`（订阅），`comment add`（含 `--reply-to`）/ `delete` / `like` / `unlike`
+  - 登录只支持导入浏览器 cookie；支持多账号（`-a`、`auth use`）。没有开 YouTube 频道的 Google 账号以 Google 账号 ID 作为用户 ID
+  - `item media` / `download` 走 VISIONOS 客户端、不带登录，给出最清晰的视频轨和音频轨两个文件；同一出口 IP 请求过多时 YouTube 会要求人机验证（`RISK_CONTROL`）
+  - `item list`（自己上传的视频，数据来自 YouTube Studio）；`live send`：发直播聊天文字消息；`channel create`：给账号开频道
+  - `item publish`（◐ 部分支持）：发布视频（标题、简介、标签、`--visibility public|private`、`--schedule` 定时发布）。自定义封面（`--cover`）未经真机验证，可能需要已验证的账号；`item delete`：删除自己的视频（需要确认，2026-10-30 实测通过）。两者走 YouTube Studio：建视频和删除要求网页端 BotGuard 校验，由本机的无头 Chromium 计算，其余请求都由 Node 发出。Chromium 按 `catbus config set youtube.browser <路径>`、环境变量 `CATBUS_YOUTUBE_BROWSER`、Playwright 缓存的顺序查找，不使用系统里的 Google Chrome（AGENTS.md 5.7）
+  - core：配置项新增 `youtube.browser`（AGENTS.md 5.5）
+- 平台规范：YouTube 的 web 端声明 `guest: true`（AGENTS.md 5.2 的特例），读取命令不登录可用
+- 新增 `docs/platforms/youtube.md`，更新 Agent 技能、多语言 README 与 llms.txt
+- `catbus tui`：全屏交互界面（Ink + React）。平台、命令、参数表单、登录要求都从注册表读，新增平台自动出现；`/` 命令面板跨平台搜命令；结果页左列表右详情，自动翻页；底部始终显示等价的命令行，按 `c` 复制
+- 界面里登录：二维码画在界面里（黑码白底，固定色，纠错等级 M），短信验证码、密码（隐藏输入）、cookie 在界面里输入，即梦的浏览器授权链接显示在界面里，抖音扫码后风控要求的短信验证码（2046）也在界面里输入；平台在提问前给的说明（待选账号等）显示在提问上方。登录页的表单从注册表里 `auth login` 的选项生成（含 `--auto-bind` 和平台私有选项），新增登录选项时自动出现；`a` 账号页可切换（与 `auth use` 一样调用端的切换钩子）、在线检查、登出、登录新账号。`core/login.ts` 增加 `LoginUi` 钩子和 `claimStdin()`（界面运行期间钩子之外的提问报 `USAGE`，不抢 stdin），CLI 行为不变
+- 界面里监听：`live listen`、`msg listen` 显示成滚动事件流，可暂停、按类型过滤，带 `--duration` 倒计时和每分钟事件数
+- 结果页 `Enter`：列出可以接着做的命令（评论、作者、监听、12306 的票价与经停站），参数已按 4.8 填好；`Esc` 回到上一页结果
+- 像素版猫巴士吉祥物和约 1 秒的启动动画（任意键跳过）；Windows 上默认不动（控制台整屏重绘会闪），`CATBUS_TUI_ANIMATE=1` 打开
+- 配色：Catppuccin Mocha / Latte，文字对底色对比度不低于 4.5:1；`T` 键运行中切换；`NO_COLOR`、`CATBUS_TUI_THEME`、`CATBUS_TUI_ASCII`（终端把 ● │ 显示成两列宽时用）
+- `catbus doctor` 新增 `tui` 检查项：在子进程里用假 TTY 把真实界面跑一遍（渲染、布局、按键），CI 的冒烟测试借此在每个目标系统上覆盖界面
+- 冒烟测试（`scripts/smoke.mjs`）增加三项 `catbus tui` 检查：非交互环境报 `USAGE`、离屏渲染自检、伪终端里启动与退出（POSIX 且有 python3 时，`scripts/smoke-tui.py`）
+- 文档：`docs/guide/tui.md`
+
 ### Changed
 
-- 同步上游 `cv-cat/catbus` `87dfce4`（0.3.0；该提交的 `ci` 与 `docker` 全部通过，YouTube 提交 `ee20285` 的 CI 是红的，未同步）。上游 0.2.1 → 0.3.0 的 jimeng / maoyan / mteam 三个新平台、bilibili 定时发布与双封面 / 稿件编辑 / 置顶评论、抖音 2046 与小红书 471 登录修复、tiktok 搜索与京东订单中心适配全部收进；适配器清单仍只列已声明身份列、可运行的格子
-- 采析绘适配跟着上游新写命令补齐 `mutating: true`：bilibili `item edit`、`comment pin` / `comment unpin`，以及 0.2.1 就漏标的 tiktok `folder add`（原先会被当成读命令暴露）；`manifest()` 继续按 `mutating` / `stream` / `confirm` 机械排除写命令
+- 同步上游 `cv-cat/catbus`：先同步 `87dfce4`（0.3.0，`ci` / `docker` 全绿），本次再同步到 `419e030`（WebUI 合并前的最后一个提交）。上游自 2026-11-16 起 master 的 `ci` / `docker` 全部约 2 秒即失败且无步骤，最后一个「CI 全绿且仍在历史里」的提交就是 `87dfce4`，因此经人工确认后跳过 WebUI 大改动、取 `419e030`，并在本地跑完整 `npm ci` → build → test → `audit:mutating` → 采析绘集成测试后才提交
+- 采析绘适配跟着上游新写命令补齐 `mutating: true`：bilibili `item edit`、`item coin`、`item triple`、`comment pin` / `comment unpin`，以及 `series add` / `series sort` 和 0.2.1 就漏标的 tiktok `folder add`（原先会被当成读命令暴露）；`manifest()` 继续按 `mutating` / `stream` / `confirm` 机械排除写命令，`audit:mutating` 仍是同步硬门槛
+- 内部：`src/cli/exec.ts` 提供进程内运行命令的 `prepare` / `invoke`，按 `runPlatform` 的顺序调用 `dispatch.ts` 里同一批校验、身份解析、凭证落盘函数，TUI 只经它运行命令；`dispatch.ts` 里这几个函数改为导出，`--auto-bind` 的检查和 `auth status` 的回写各抽成一个函数，CLI 行为不变。`tests/exec.test.ts` 检查两条路径结果一致
+
+### Fixed
+
+- xhs：扫码确认后的短信人机验证适配主站 2026-11-09 实测的新协议（HTTP 471，`verifyType 213` 登录强制短信验证，替代 0.3.0 适配的验证页链 120）。在登录链的会话上直接验证（不重建验证页会话、无 vc/init），验证码发到输入的手机号（`--phone` 或终端输入，需与账号绑定手机一致；非交互下与验证码一起从 stdin 读两行）；getverifyuserinfo / vc/send / vc/check 的请求键序照实测。120 链保留：服务端按环境在两条验证间切换。短信登录（`--method sms`）的独立链路不变
 
 ## [0.3.0] - 2026-11-05
 

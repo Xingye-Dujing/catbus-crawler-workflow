@@ -49,7 +49,7 @@ catbus douyin comment list <item> --limit 100 -o jsonl | jq -r '.text'
 ```
 
 - Item：`id kind url title text author{id name url} created_at cover media[] stats{views likes comments collects shares} price status`
-- Comment：`id item_id parent_id author text created_at stats{likes replies}`
+- Comment：`id item_id parent_id author text media created_at stats{likes replies}`（`media` 是评论里附带的图片 / 表情包，没有时为 `[]`）
 - User：`id name handle avatar url bio stats{followers following items likes}`
 
 有些字段因为平台不返回而恒为 null（例如抖音作品的 `title`、抖音和小红书列表的 `stats.views`），平台文件里有写。需要平台原始字段时加 `--raw`。完整类型见 [../reference/commands.md](../reference/commands.md)。
@@ -62,6 +62,18 @@ catbus xhs item download "<笔记 url>" --dir ./xhs   # 存到本地，文件名
 ```
 
 已有文件默认跳过，`--overwrite` 覆盖。批量下载时逐条执行，不要并发。
+
+`--subdir title` 让每条内容放进以标题命名的子目录（如 `./xhs/<标题>/xhs_<id>_1.jpg`），目录名已清洗成各系统都能用的形式；`--subdir id` 按 ID 分目录。
+
+同时导出帖子信息和评论：
+
+```bash
+catbus xhs item download "<笔记 url>" --dir ./xhs --meta                          # 旁边多一个 xhs_<id>.json：作者、正文、互动数
+catbus xhs item download "<笔记 url>" --dir ./xhs --comments 50 --replies 10      # 再带上前 50 条评论、每条前 10 条回复
+catbus xhs item download "<笔记 url>" --dir ./xhs --comments all --no-media       # 不下载媒体，只要信息和全部评论
+```
+
+`<platform>_<id>.json` 的结构是 `{schema, platform, exported_at, item, comments, comments_truncated}`：`item` 与 `item get` 的输出相同，`comments` 是 Comment 再加 `replies`。取评论中途遇到风控时停下，已经取到的照样写出，`comments_truncated` 为 true，命令仍然成功。评论多时请求也多，`--comments all` 慎用。
 
 ## 跨平台
 

@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import { GUEST } from '../../../core/auth-store.js'
 import { CatbusError } from '../../../core/errors.js'
 import { writeFileAtomic } from '../../../core/fsutil.js'
-import { cookieCredential, finishLogin, freshCredential, interactive, loginContext, prompt, showQrcode, smsLogin, smsState } from '../../../core/login.js'
+import { cookieCredential, finishLogin, freshCredential, interactive, loginContext, prompt, qrcodeScanned, showQrcode, smsLogin, smsState } from '../../../core/login.js'
 import * as n from '../../../core/normalize.js'
 import { cacheDir } from '../../../core/paths.js'
 import * as rand from '../../../core/rand.js'
@@ -131,7 +131,7 @@ async function qrLogin(ctx: Ctx) {
     await rand.sleep(QR_POLL)
     const res = await login.checkQrcode(jd)
     if (res.code !== last) {
-      if (res.code === 202) ctx.log.info('已扫码，请在手机上确认')
+      if (res.code === 202) qrcodeScanned(ctx)
       else if (res.code === 203 || res.code === 205) nextRefresh = 0
       last = res.code
     }
@@ -259,7 +259,8 @@ export async function authStatus(ctx: Ctx): Promise<AuthStatus> {
   const s = await api.checkSession(jd)
   return {
     logged_in: s.alive,
-    user: s.alive && jd.pin ? norm.meRef(jd.pin, s.name) : null,
+    // loginservice 只给昵称，没有头像（AGENTS 5.3：不为头像额外请求）
+    user: s.alive && jd.pin ? n.accountUser(norm.meRef(jd.pin, s.name), null) : null,
     method: s.alive ? ctx.credential.method : null,
     expires_at: null,
   }

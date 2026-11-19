@@ -1,5 +1,5 @@
 import * as n from '../../../core/normalize.js'
-import type { Comment, Conversation, Item, Media, Message, User, UserRef } from '../../../core/schemas.js'
+import type { AccountUser, Comment, Conversation, Item, Media, Message, User, UserRef } from '../../../core/schemas.js'
 import { X_HOST } from './profile.js'
 
 /** X 原始对象 → 归一化类型（AGENTS 6.2），字段取值参照上游 utils/data_util.py 的 handle_work_info。 */
@@ -21,7 +21,18 @@ export const tweetUrl = (id: string, screenName?: string | null) => (screenName 
 export function userRef(u: any): UserRef | null {
   if (!u) return null
   const screenName = screenNameOf(u)
-  return n.userRef({ id: u.rest_id ?? u.legacy?.id_str, name: u.core?.name ?? u.legacy?.name, url: screenName ? userUrl(screenName) : null })
+  return n.userRef({
+    id: u.rest_id ?? u.legacy?.id_str,
+    name: u.core?.name ?? u.legacy?.name,
+    url: screenName ? userUrl(screenName) : null,
+    // 头像与 user() 同源：新版 avatar.image_url，老版 legacy.profile_image_url_https
+    avatar: u.avatar?.image_url ?? u.legacy?.profile_image_url_https,
+  })
+}
+
+/** 当前账号（Viewer）→ AccountUser：字段与 userRef() 相同。 */
+export function account(u: any): AccountUser | null {
+  return userRef(u)
 }
 
 /** 完整用户资料：新版字段在 core / avatar / profile_bio / relationship_counts / tweet_counts，老版在 legacy。 */
@@ -66,6 +77,30 @@ function mediaOf(legacy: any): { media: Media[]; cover: string | null } {
   return { media, cover: n.url(list[0]?.media_url_https) }
 }
 
+/** 链接卡片的缩略图：binding_values 是 {key, value.image_value} 列表，按清晰度从高到低取第一个有的。 */
+const CARD_IMAGE_KEYS = ['thumbnail_image_large', 'summary_photo_image_large', 'photo_image_full_size_large', 'thumbnail_image_original', 'thumbnail_image', 'player_image_large', 'player_image']
+function cardCover(t: any): string | null {
+  const values: any[] = t.card?.legacy?.binding_values ?? []
+  if (!Array.isArray(values)) return null
+  for (const key of CARD_IMAGE_KEYS) {
+    const url = values.find((v) => v?.key === key)?.value?.image_value?.url
+    if (url) return n.url(url)
+  }
+  return null
+}
+
+/** 推文自己没有媒体时的封面：先取被引用推文的第一张媒体，再取链接卡片的缩略图（AGENTS 4.8）。 */
+function fallbackCover(t: any): string | null {
+  const quoted = unwrap(t.quoted_status_result?.result)
+  return (quoted?.legacy ? mediaOf(quoted.legacy).cover : null) ?? cardCover(t)
+}
+
+/** 转推按原推归一化：外层只有截断的「RT @…」正文，没有媒体，计数为 0（AGENTS 4.8）。 */
+function original(t: any): any {
+  const rt = unwrap(t.legacy?.retweeted_status_result?.result)
+  return rt?.legacy ? rt : t
+}
+
 /** 推文对象里的正文：长推文的全文在 note_tweet 里，legacy.full_text 是截断的。 */
 function textOf(t: any): string | null {
   return n.str(t.note_tweet?.note_tweet_results?.result?.text ?? t.legacy?.full_text)
@@ -73,11 +108,13 @@ function textOf(t: any): string | null {
 
 /** tweet result → Item。kind：有视频为 video，有图片为 image，否则 text（上游 work_type）。 */
 export function item(raw: any): Item {
-  const t = unwrap(raw)
+  const t = original(unwrap(raw))
   const legacy = t.legacy ?? {}
   const author = t.core?.user_results?.result
   const id = n.id(t.rest_id ?? legacy.id_str)
-  const { media, cover } = mediaOf(legacy)
+  const own = mediaOf(legacy)
+  const media = own.media
+  const cover = own.cover ?? fallbackCover(t)
   return n.item(
     {
       id,
@@ -112,6 +149,7 @@ export function comment(raw: any, itemId: string): Comment {
       parent_id: parent === itemId ? null : parent,
       author: userRef(t.core?.user_results?.result),
       text: textOf(t) ?? '',
+      media: mediaOf(legacy).media,
       created_at: n.time(legacy.created_at),
       stats: { likes: n.count(legacy.favorite_count), replies: n.count(legacy.reply_count) },
     },

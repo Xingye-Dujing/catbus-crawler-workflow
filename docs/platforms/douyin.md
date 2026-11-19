@@ -8,7 +8,7 @@
 | 上游仓库 | [cv-cat/DouYin_Spider](https://github.com/cv-cat/DouYin_Spider) |
 | 移植基线 | `fix-dtrait-blob` 分支的 [`c28ee5f`](https://github.com/cv-cat/DouYin_Spider/commit/c28ee5fc4d1542039601d503c97da6a1bdf0522a)（还没合进上游 master），记录在 [`src/platforms/douyin/UPSTREAM`](../../src/platforms/douyin/UPSTREAM) |
 | 端 | web ✓ · app ○ 规划中 · pc ○ 规划中 |
-| 命令（web） | 已实现 40 条（✓ 34 · ◐ 6），规划中 ○ 31 条 |
+| 命令（web） | 已实现 41 条（✓ 34 · ◐ 7），规划中 ○ 30 条 |
 
 命令表由注册表生成，与 `catbus platforms douyin` 一致；选项以 `catbus douyin <resource> <action> --help` 为准。通用的命令语法、输出结构见 [AGENTS.md 第 4 节](../../AGENTS.md#4-命令规范)。
 
@@ -59,7 +59,7 @@
 | `item search` | ✓ | 搜索作品。`--type video` 走视频频道搜索，其余走综合频道；`--type image` 只要图文。取值：`--sort` general / popular / latest；`--time` all / day / week / half_year；`--type` all / video / image。私有选项 `--length`、`--range`。 |
 | `item list` | ◐ | 我发布的作品，带审核状态。取发布页的作品预览（work_list）；定时未发布的作品 status 为 draft。 |
 | `item media` | ✓ | 作品的媒体地址。 |
-| `item download` | ✓ | 下载作品的媒体。 |
+| `item download` | ✓ | 下载作品的媒体，可同时导出信息和评论（`--meta`、`--comments`）。 |
 | `item like` | ✓ | 点赞。 |
 | `item unlike` | ✓ | 取消点赞。 |
 | `item collect` | ✓ | 收藏。私有选项 `--folder`。 |
@@ -93,7 +93,9 @@
 | 命令 | 状态 | 说明 |
 |---|---|---|
 | `live get` | ✓ | 直播间信息。 |
+| `live list` | ◐ | 直播列表。不带 `--category` 是直播首页的推荐，带 `--category` 是分区里的直播间；`--category` 取 `live categories` 的 id（如 `4_103`），也认分区名或分区页链接。请求按直播网页版补的，上游没有。 |
 | `live search` | ✓ | 搜索直播。 |
+| `live categories` | ◐ | 直播分区（父分区和子分区）。取自直播网页版首页，网页版只给出部分分区的子分区。 |
 | `live listen` | ✓ | 监听弹幕、礼物、进场等事件。持续输出 jsonl。 |
 | `live history` | ◐ | 最近的弹幕。只有进房时 im/fetch 带回的最近 15 条。 |
 | `live send` | ◐ | 发弹幕，或用 `--gift` 送礼。`--gift` 规划中。送礼（`--gift`）需要确认。 |
@@ -101,7 +103,7 @@
 | `live rank` | ✓ | 直播间排行榜。私有选项 `--ranking`。 |
 | `live products` | ✓ | 直播间商品。 |
 | `live media` | ◐ | 直播流地址。拉流地址取自房间资料（room/web/enter）。 |
-| `live list`、`live categories`、`live gifts`、`live replays`、`live start`、`live stop` | ○ | 规划中 |
+| `live gifts`、`live replays`、`live start`、`live stop` | ○ | 规划中 |
 
 ### notice
 
@@ -131,13 +133,19 @@
 | `folder list` | ✓ | 收藏夹列表。 |
 | `folder items`、`folder create`、`folder update`、`folder delete` | ○ | 规划中 |
 
+### keyword
+
+| 命令 | 状态 | 说明 |
+|---|---|---|
+| `keyword hot` | ◐ | 热搜词：网页端热榜（douyin.com/hot），按榜单顺序，`heat` 为热度值。非上游：请求按网页端补的（`aweme/v1/web/hot/search/list`），不含置顶词和实时上升热点。 |
+| `keyword suggest` | ○ | 规划中 |
+
 ### 整组规划中
 
 下面这些 resource 在本平台还没有已实现的命令，执行时都返回 `NOT_IMPLEMENTED`（退出码 4）。
 
 | resource | 命令 |
 |---|---|
-| `keyword` | `suggest` `hot` |
 | `series` | `list` `items` |
 | `history` | `list` |
 | `topic` | `search` |
@@ -170,7 +178,7 @@
 |---|---|
 | 作品 `<item>` | `aweme_id`（纯数字）、作品页链接 `https://www.douyin.com/video/<id>`（也认 `/note/`、`/slides/`、`?modal_id=<id>`）、分享短链 `https://v.douyin.com/...`，或整段分享文案（会从里面找出短链） |
 | 用户 `<user>` | `sec_uid`（`MS4wLjAB` 开头）、主页链接 `https://www.douyin.com/user/<sec_uid>`、分享短链，或 `me` |
-| 直播间 `<room>` | 直播间号（web_rid，数字），或 `https://live.douyin.com/<直播间号>` |
+| 直播间 `<room>` | 直播间号（web_rid，数字）、`https://live.douyin.com/<直播间号>`，或 App 里复制的直播分享链接 / 分享文案（`v.douyin.com` 短链，自动换成直播间号；直播结束后可能换不到） |
 | 商品 `<product>` | `promotion_id`（数字），或 `live products` 输出的商品 url（带 `id`、`promotion_id`、`shop_id`） |
 | 会话 `--conversation` | 单聊会话 ID，形如 `0:1:<uid>:<uid>` |
 | 分享目标 `--share` | 作品（ID 或链接）、用户（`sec_uid`、主页链接或 `me`），其余 http(s) 链接当作网页卡片 |

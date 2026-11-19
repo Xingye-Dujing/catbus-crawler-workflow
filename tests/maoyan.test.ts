@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fakeResponse, type HeaderPairs, type HttpResponse, mockSender, type PreparedRequest } from '../src/core/http.js'
 import * as rand from '../src/core/rand.js'
 import { resolveCity, resolveProject } from '../src/platforms/maoyan/web/resolve.js'
@@ -76,7 +76,7 @@ describe('maoyan 平台（web）', () => {
       expect(calls[0]!.cookies).toEqual([])
     })
 
-    it('归一化为 Item（kind 为 goods），演出者作 author，分类 / 开售写进 text', async () => {
+    it('归一化为 Item（kind 为 goods），演出者作 author，分类 / 开售 / 开售时间写进 text', async () => {
       mock()
       const r = await cli('maoyan', 'feed', 'list')
       expect(r.env.data).toHaveLength(3)
@@ -85,8 +85,13 @@ describe('maoyan 平台（web）', () => {
         kind: 'goods',
         url: 'https://show.maoyan.com/qqw#/detail/514992',
         title: '岳云鹏孙越相声专场演出',
-        text: '分类：相声\n演出者：岳云鹏、孙越\n开售：已开售',
-        author: { id: '11399', name: '岳云鹏', url: null },
+        text: '分类：相声\n演出者：岳云鹏、孙越\n开售：已开售\n开售时间：2026-10-29T10:18:00+08:00',
+        author: {
+          id: '11399',
+          name: '岳云鹏',
+          url: null,
+          avatar: 'https://p0.pipi.cn/mediaplus/bigdata_crawler_media/e429585bc8b05172a96b1be1357007abe3e59.jpg?imageMogr2/thumbnail/2500x2500%3E',
+        },
         created_at: null,
         cover: expect.stringContaining('https://p0.pipi.cn/'),
         media: [],
@@ -165,7 +170,7 @@ describe('maoyan 平台（web）', () => {
         kind: 'goods',
         url: 'https://show.maoyan.com/qqw#/detail/514992',
         title: expect.stringContaining('岳云鹏孙越相声专场演出'),
-        text: '时间：2026.12.12 19:30 周六\n城市：北京\n场馆：北京展览馆剧场（官方售票）（西直门外大街135号）\n票价：380、1680\n状态：立即预定',
+        text: '时间：2026.12.12 19:30 周六\n城市：北京\n场馆：北京展览馆剧场（官方售票）（西直门外大街135号）\n票价：380、1680\n状态：立即预定\n开售时间：2026-10-29T10:18:00+08:00',
         author: null,
         price: { amount: 380, currency: 'CNY' },
         status: null,
@@ -312,7 +317,7 @@ describe('maoyan 平台（web）', () => {
       expect(calls).toHaveLength(0)
       await cli('maoyan', 'auth', 'login', '--method', 'cookie', '--cookie', 'dper=fake-dper')
       const on = await cli('maoyan', 'auth', 'status')
-      expect(on.env.data).toMatchObject({ logged_in: true, method: 'cookie', user: { id: '12345' } })
+      expect(on.env.data).toMatchObject({ logged_in: true, method: 'cookie', user: { id: '12345', avatar: null } })
       restoreSender!()
       mock({ '/api/account/v1/getUserInfoByToken': () => json('{"error":{"code":10010101,"message":"登录令牌无效"},"success":false}') })
       const off = await cli('maoyan', 'auth', 'status')
@@ -351,7 +356,7 @@ describe('maoyan 平台（web）', () => {
       await login()
       const r = await cli('maoyan', 'item', 'get', '514992', '--tickets')
       expect(r.code).toBe(0)
-      expect(r.env.data.text).toContain('状态：立即预定\n场次：2026-12-12 星期六 19:30\n票档：380元，实售价 342，余票 12\n票档：980元，实售价 980，余票 0，售罄\n场次：2026-12-13 星期日 19:30')
+      expect(r.env.data.text).toContain('状态：立即预定\n开售时间：2026-10-29T10:18:00+08:00\n场次：2026-12-12 星期六 19:30\n票档：380元，实售价 342，余票 12\n票档：980元，实售价 980，余票 0，售罄\n场次：2026-12-13 星期日 19:30')
       expect(r.env.data.text).not.toContain('隐藏')
       expect(calls.filter((c) => c.path === '/my/odea/show/tickets').map((c) => new URL(c.url).searchParams.get('showId'))).toEqual(['11', '12'])
 
@@ -371,6 +376,37 @@ describe('maoyan 平台（web）', () => {
       expect(t.url).toBe(
         `https://m.dianping.com/my/odea/show/tickets?showId=11&projectId=514992&clientPlatform=3&supportNewPromotion=true&optimus_risk_level=71&optimus_code=10&uuid=${tu}&sellChannel=1&cityId=2&token=fake-dper&yodaReady=h5&csecplatform=4&csecversion=4.2.4`,
       )
+    })
+
+    it('真实响应：票面价、实售价、余票、限购逐项写出，打折 / 售罄 / 余票少于限购都保留；场次后一行场次时间', async () => {
+      mock({
+        '/api/account/v1/getUserInfoByToken': USER,
+        '/my/odea/project/shows/preselect': onSale,
+        '/my/odea/project/shows': () => json(fixture('shows.json')),
+        '/my/odea/show/tickets': () => json(fixture('tickets.json')),
+      })
+      await login()
+      const r = await cli('maoyan', 'item', 'get', '458416', '--tickets')
+      expect(r.code).toBe(0)
+      expect(r.env.data.text).toContain(
+        '场次：2026-11-18 周三 19:30\n场次时间：2026-11-18T19:30:00+08:00\n' +
+          '票档：N，票面价 80，实售价 80，余票 0，限购 6，售罄\n' +
+          '票档：I，票面价 280，实售价 168，余票 6，限购 6\n' +
+          '票档：A，票面价 1080，实售价 648，余票 4，限购 6',
+      )
+    })
+
+    it('还没开票（shows 为空）：text 里没有场次行和票档行', async () => {
+      mock({
+        '/api/account/v1/getUserInfoByToken': USER,
+        '/my/odea/project/shows/preselect': () => json('{"success":true,"data":{"showListVO":[]}}'),
+      })
+      await login()
+      const r = await cli('maoyan', 'item', 'get', '514992', '--tickets')
+      expect(r.code).toBe(0)
+      expect(r.env.data.text).not.toMatch(/场次|票档/)
+      const raw = await cli('maoyan', 'item', 'get', '514992', '--tickets', '--raw')
+      expect(raw.env.data.shows).toEqual([])
     })
 
     it('未开售：走 preselect，不请求在售接口', async () => {
@@ -408,5 +444,33 @@ describe('maoyan 平台（web）', () => {
     const r = await cli('maoyan', 'item', 'search', '演唱会')
     expect(r.code).toBe(4)
     expect(r.env.error.code).toBe('NOT_IMPLEMENTED')
+  })
+})
+
+// 真实的 pclogin guard（jsdom 跑 H5guard 4.3.0），不用 mockGuard：页面脚本会打日志，
+// jsdom 默认把它们转发到 stdout，会污染 stdout 上的 JSON 信封（AGENTS 6.1），回归见 fix/maoyan-jsdom-stdout。
+describe('maoyan 扫码登录的 jsdom 环境', () => {
+  useTempHome()
+
+  it('出指纹和 mtgsig 时 stdout 保持纯净（页面日志只进 stderr）', async () => {
+    const { startGuard } = await import('../src/platforms/maoyan/web/loginSign.js')
+    const out: string[] = []
+    const err: string[] = []
+    const o = vi.spyOn(process.stdout, 'write').mockImplementation((s) => (out.push(String(s)), true))
+    const e = vi.spyOn(process.stderr, 'write').mockImplementation((s) => (err.push(String(s)), true))
+    let guard: Awaited<ReturnType<typeof startGuard>> | undefined
+    try {
+      guard = startGuard()
+      expect(guard.fingerprint).toMatch(/^H5dfp_/)
+      const sig = await guard.sign('https://accountapi.dianping.com/mlogin/dp/api/v1/qrlogin/getQrCodeImg?risk_app=216')
+      expect(sig).toContain('"a1"')
+    } finally {
+      guard?.stop()
+      o.mockRestore()
+      e.mockRestore()
+    }
+    expect(out.join('')).toBe('')
+    // jsdom 的「Not implemented」警告与页面脚本日志走 stderr，不进 stdout
+    expect(err.join('')).toContain('jsdom')
   })
 })

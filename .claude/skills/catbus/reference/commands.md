@@ -26,6 +26,8 @@ catbus <platform> <resource> <action> [参数...] [选项...]
 | `-e, --endpoint web\|app\|pc` | 端，默认 `web`（app / pc 尚未实现） |
 | `-o, --output json\|jsonl` | 输出格式，默认 `json` |
 | `--raw` | 用平台原始对象代替归一化对象 |
+| `--fields <路径,...>` | 只输出 `data` 条目里的这些字段，点号进嵌套、经过数组作用到每个元素，例如 `id,url,author.name`；没有的字段为 null |
+| `--dry-run` | 只做参数、选项和登录态检查，不执行；`data` 为 `{args options confirm}` |
 | `--proxy <url>` | 本次调用的代理 |
 | `-v, --verbose` | stderr 输出调试日志（已脱敏） |
 | `-q, --quiet` | 只保留错误 |
@@ -65,7 +67,7 @@ catbus <platform> <resource> <action> [参数...] [选项...]
 | `item related <item>` | Item[]，分页 |
 | `item list` | Item[]，分页：自己发布的，带审核状态 |
 | `item media <item>` | Media[]：可播放 / 下载的地址 |
-| `item download <item> [--dir <目录>] [--overwrite]` | File[]；文件名 `<platform>_<id>_<序号>.<ext>` |
+| `item download <item> [--dir <目录>] [--overwrite] [--subdir none\|id\|title] [--meta] [--comments <N\|all>] [--replies <N\|all>] [--no-media]` | File[]；文件名 `<platform>_<id>_<序号>.<ext>`；`--subdir` 时每条内容一个子目录；`--meta` / `--comments` 另写 `<platform>_<id>.json`（ExportDoc：`{schema platform exported_at item comments[+replies] comments_truncated}`，File.type 为 `data`） |
 | `item like` / `unlike` / `collect` / `uncollect` / `repost` / `unrepost <item>` | `{id}` |
 | `item publish [发布选项]` | Item |
 | `item delete <item>` | `{id}`，危险操作 |
@@ -206,13 +208,14 @@ catbus <platform> <resource> <action> [参数...] [选项...]
 
 | 类型 | 字段 |
 |---|---|
-| UserRef | `id name url` |
+| UserRef | `id name url avatar`（作者、评论者、私信对方等；`avatar` 为 https 地址，平台不给时为 null） |
+| AccountUser | `id name url avatar`（字段与 UserRef 相同，用于 `auth list` / `status` / `login` 里账号的 user） |
 | User | `id name handle avatar url bio stats{followers following items likes}` |
 | Item | `id kind url title text author:UserRef created_at cover media:Media[] stats{views likes comments collects shares} price status` |
 | Media | `id type url width height duration` |
-| Comment | `id item_id parent_id author:UserRef text created_at stats{likes replies}` |
+| Comment | `id item_id parent_id author:UserRef text media:Media[] created_at stats{likes replies}` |
 | Live | `id url title status host:UserRef cover stats{viewers}` |
-| Event | `type time user:UserRef text gift{name count}` |
+| Event | `type time user:UserRef text gift{name count} stats{viewers likes}` |
 | Conversation | `id peer:UserRef unread last_message updated_at` |
 | Message | `id conversation_id from:UserRef type text media:Media[] created_at` |
 

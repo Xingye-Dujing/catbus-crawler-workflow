@@ -1,11 +1,16 @@
 import * as n from '../../../core/normalize.js'
-import type { BonusRecord, Category, Conversation, Message, Torrent, User, UserRef } from '../../../core/schemas.js'
+import type { AccountUser, BonusRecord, Category, Conversation, Message, Torrent, User, UserRef } from '../../../core/schemas.js'
 import { withRaw } from '../../../core/schemas.js'
 import type { Row } from './api.js'
 import { SITE } from './client.js'
 
 export function userRef(raw: Row): UserRef {
-  return { id: String(raw.id), name: n.str(raw.username), url: `${SITE}/profile/${raw.id}` }
+  return { id: String(raw.id), name: n.str(raw.username), url: `${SITE}/profile/${raw.id}`, avatar: n.avatar(raw.avatarUrl) }
+}
+
+/** 当前账号（member/profile）→ AccountUser：头像与 user() 同源（avatarUrl）。 */
+export function account(raw: Row): AccountUser {
+  return n.accountUser(userRef(raw), raw.avatarUrl)
 }
 
 export function user(raw: Row): User {
@@ -15,7 +20,7 @@ export function user(raw: Row): User {
 export function torrent(raw: Row): Torrent {
   const status = raw.status ?? {}
   const author = !raw.anonymous && raw.author != null
-    ? { id: String(raw.author), name: null, url: `${SITE}/profile/${raw.author}` } : null
+    ? { id: String(raw.author), name: null, url: `${SITE}/profile/${raw.author}`, avatar: null } : null
   return withRaw({
     ...n.item({
       id: String(raw.id), kind: 'torrent', url: `${SITE}/detail/${raw.id}`,
@@ -34,12 +39,12 @@ export function category(raw: Row): Category {
   return n.category({ id: String(raw.id), name: String(raw.nameChs ?? raw.nameCht ?? raw.nameEng ?? raw.id), parent_id: n.idOrNull(raw.parent) }, raw)
 }
 
-const SYSTEM: UserRef = { id: '0', name: '系统', url: null }
+const SYSTEM: UserRef = { id: '0', name: '系统', url: null, avatar: null }
 
 function peerRef(id: unknown): UserRef | null {
   if (id == null || id === '') return null
   if (String(id) === '0') return SYSTEM
-  return { id: String(id), name: null, url: `${SITE}/profile/${id}` }
+  return { id: String(id), name: null, url: `${SITE}/profile/${id}`, avatar: null }
 }
 
 const sizeText = (bytes: unknown): string | null => {
@@ -106,12 +111,57 @@ export function bonusRate(raw: Row): BonusRate {
   }, raw)
 }
 
-/** credit/logs 的一行 → BonusRecord。change 是魔力值变化；上传 / 下载量的变化写进 note。 */
+/** 种子促销代码（credit/logs 的 [DP=…]、Torrent.discount）→ 中文。按站点代码推断（实测只见过 P50），未经站点文档确认。 */
+const DISCOUNTS: Record<string, string> = {
+  FREE: '免费', PERCENT_50: '50%', P50: '50%', PERCENT_70: '70%', P70: '70%', PERCENT_30: '30%', P30: '30%',
+  _2X: '2X 上传', _2X_FREE: '2X 免费', _2X_PERCENT_50: '2X 50%', NORMAL: '无促销',
+}
+/** credit/logs 的站点标签 → 中文；不在表里的 ASCII 标签原样保留。 */
+const TAGS: Record<string, string> = { EXAM: '考核期间' }
+const IPV4 = /\b(?:\d{1,3}\.){3}\d{1,3}\b/g
+const IPV6 = /(?<![\w:])(?=[0-9a-f:.]*:[0-9a-f:.]*:)[0-9a-f]{0,4}(?::[0-9a-f]{0,4}){2,7}(?:%\w+)?(?![\w:])/gi
+
+/**
+ * credit/logs 的 text → 给人看的说明与种子 ID。
+ * 实测格式：`[TID=…][DP=P50][IP=…][EXAM]`、`[TID=…][IP=…][SN_DL_DIFF][EXAM]`、`[做種積分][考核期間無加成][EXAM]`。
+ * TID 拆成 url，IP 去掉，DP / EXAM 转成中文，中文标签去掉方括号，其余原样；方括号外的文字保留，其中的 IP 同样去掉。
+ */
+export function bonusNote(text: unknown): { parts: string[]; tid: string | null } {
+  const parts: string[] = []
+  let tid: string | null = null
+  let exam = false
+  const raw = typeof text === 'string' ? text : ''
+  const rest = raw.replace(/\[([^\[\]]*)\]/g, (_m, tag: string) => {
+    const eq = tag.indexOf('=')
+    const key = (eq < 0 ? tag : tag.slice(0, eq)).trim().toUpperCase()
+    const value = eq < 0 ? '' : tag.slice(eq + 1).trim()
+    if (key === 'IP') return ''
+    if (key === 'TID') { if (/^\d+$/.test(value)) tid ??= value; return '' }
+    if (key === 'DP') { if (value) parts.push(`促销：${DISCOUNTS[value.toUpperCase()] ?? value}`); return '' }
+    if (key === 'EXAM' && eq < 0) { exam = true; return '' }
+    if (eq < 0 && TAGS[key]) parts.push(TAGS[key]!)
+    else if (tag.trim()) parts.push(eq < 0 && /[^\x00-\x7f]/.test(tag) ? tag.trim() : `[${tag.replace(IPV4, '').replace(IPV6, '').trim()}]`)
+    return ''
+  })
+  const plain = rest.replace(IPV4, '').replace(IPV6, '').replace(/\s+/g, ' ').trim()
+  if (plain) parts.unshift(plain)
+  // 正文或其他标签已经说了考核（如「考核期間無加成」；繁体写法同为「考核」）时不再追加
+  if (exam && !parts.some((part) => part.includes('考核'))) parts.push(TAGS.EXAM!)
+  return { parts, tid }
+}
+
+/**
+ * credit/logs 的一行 → BonusRecord。change 是魔力值变化；note 是 bonusNote 处理后的说明加上传 / 下载量的变化；
+ * url 是相关种子的详情页（text 里的 TID，没有时 TORRENT 记录的 relatedId）。
+ */
 export function bonusRecord(raw: Row): BonusRecord {
+  const { parts, tid } = bonusNote(raw.text)
   const extra = [
     Number(raw.uploaded) ? `上传：${sizeText(raw.uploaded)}` : null,
     Number(raw.downloaded) ? `下载：${sizeText(raw.downloaded)}` : null,
   ]
+  const related = raw.relatedId != null && /^\d+$/.test(String(raw.relatedId)) && raw.operation === 'TORRENT' ? String(raw.relatedId) : null
+  const torrentId = tid ?? related
   const change = Number(raw.bonus)
   return withRaw({
     id: String(raw.id ?? `${raw.createdDate}#${raw.operation}`),
@@ -121,8 +171,8 @@ export function bonusRecord(raw: Row): BonusRecord {
     after: null,
     change: raw.bonus == null || !Number.isFinite(change) ? null : change,
     user: null,
-    note: [n.str(raw.text), ...extra].filter(Boolean).join('；') || null,
-    url: raw.relatedId && /^\d+$/.test(String(raw.relatedId)) && raw.operation === 'TORRENT' ? `${SITE}/detail/${raw.relatedId}` : null,
+    note: [...parts, ...extra].filter(Boolean).join('；') || null,
+    url: torrentId ? `${SITE}/detail/${torrentId}` : null,
   }, raw)
 }
 

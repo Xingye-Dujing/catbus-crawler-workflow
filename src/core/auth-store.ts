@@ -1,9 +1,10 @@
-import { readdir, rm } from 'node:fs/promises'
+import { lstat, readdir, rename, rm } from 'node:fs/promises'
 import { CatbusError } from './errors.js'
 import { isoNow, readTextIfExists, writeFileAtomic } from './fsutil.js'
 import { authDir } from './paths.js'
 import type { Endpoint } from './registry.js'
-import { type Account, type Credential, CredentialSchema, type UserRef } from './schemas.js'
+import { type Account, type AccountUser, type AuthStatus, type Credential, CredentialSchema } from './schemas.js'
+import { accountUser } from './normalize.js'
 
 /** 凭证只由 core 读写（AGENTS 5）。目录：auth/<platform>/<endpoint>/<account>.json、guest.json、_current。 */
 
@@ -29,6 +30,24 @@ function credentialFile(platform: string, endpoint: Endpoint, account: string): 
   return authDir(platform, endpoint, `${account}.json`)
 }
 
+/** 早期 Discord 的 web 凭证实际使用桌面协议。原子移动整个端目录，连同当前账号指针。 */
+export async function migrateDiscordDesktopAuth(): Promise<void> {
+  const source = authDir('discord', 'web')
+  const destination = authDir('discord', 'pc')
+  const absent = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
+  const exists = (path: string) => lstat(path).catch((error: unknown) => {
+    if (absent(error)) return null
+    throw error
+  })
+  if (!(await exists(source))?.isDirectory() || await exists(destination)) return
+  try {
+    await rename(source, destination)
+  } catch (error) {
+    // Another Catbus process may have finished migration or created a PC credential.
+    if (!absent(error) && !(await exists(destination))) throw error
+  }
+}
+
 export async function readCredential(platform: string, endpoint: Endpoint, account: string): Promise<Credential | null> {
   const file = credentialFile(platform, endpoint, account)
   const text = await readTextIfExists(file)
@@ -44,7 +63,11 @@ export async function readCredential(platform: string, endpoint: Endpoint, accou
       hint: account === GUEST ? `删除该文件后重试` : `catbus ${platform} auth logout -a ${account}${endpointFlag(endpoint)}`,
     })
   }
-  return parsed.data
+  const credential = parsed.data
+  if (platform === 'discord' && endpoint === 'pc' && credential.platform === platform && credential.endpoint === 'web' && credential.account === account) {
+    credential.endpoint = 'pc'
+  }
+  return credential
 }
 
 export async function writeCredential(credential: Credential): Promise<void> {
@@ -63,7 +86,7 @@ export function newCredential(init: {
   endpoint: Endpoint
   account: string
   method: Credential['method']
-  user?: UserRef | null
+  user?: AccountUser | null
 }): Credential {
   const now = isoNow()
   return {
@@ -101,7 +124,7 @@ export function toAccount(credential: Credential, current: boolean): Account {
     endpoint: credential.endpoint,
     account: credential.account,
     current,
-    user: credential.user,
+    user: accountUser(credential.user),
     method: credential.method,
     updated_at: credential.updated_at,
   }
@@ -129,4 +152,24 @@ export async function listAccounts(platform: string, endpoint: Endpoint): Promis
     )
   }
   return accounts
+}
+
+/**
+ * `auth status` 的结果：user 补齐 avatar；在线校验成功、返回的是凭证里的同一个用户时，
+ * 把新的昵称 / 主页 / 头像合并进凭证（由 dispatch 在命令结束时原子写回，AGENTS 5.3）。
+ * 平台这次没给出的字段保留原值。
+ */
+export function syncStatusUser(credential: Credential, status: AuthStatus): AuthStatus {
+  const user = accountUser(status.user)
+  const saved = credential.user
+  if (status.logged_in && user && saved && saved.id === user.id && credential.account !== GUEST) {
+    credential.user = {
+      id: saved.id,
+      name: user.name ?? saved.name,
+      url: user.url ?? saved.url,
+      avatar: user.avatar ?? saved.avatar ?? null,
+    }
+  }
+  status.user = user
+  return status
 }
