@@ -28,6 +28,8 @@ import {
   WEIBO_POST_COLUMNS,
   XHS_COMMENT_COLUMNS,
   XHS_NOTE_COLUMNS,
+  YOUTUBE_COMMENT_COLUMNS,
+  YOUTUBE_VIDEO_COLUMNS,
 } from './columns.js'
 import type { ArticleResult, CatbusRunner, CrawlerMode, Row, RowSink, RunParams, RunResult } from './types.js'
 
@@ -67,6 +69,35 @@ function handleOf(url: unknown, fallback: unknown): string {
   const text = asString(url)
   const last = text.split('?')[0]?.replace(/\/+$/, '').split('/').pop() ?? ''
   return last || asString(fallback)
+}
+
+/** 媒体时长（秒）→ 采析绘的 `时长` 文案；归一化的 Media.duration 单位就是秒。 */
+function durationText(seconds: unknown): string {
+  const n = Number(seconds)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  const total = Math.floor(n)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const pad = (v: number) => String(v).padStart(2, '0')
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
+}
+
+function firstVideoDuration(raw: unknown): unknown {
+  const media = asRecord(raw).media
+  if (!Array.isArray(media)) return null
+  const video = media.find((m) => isRecord(m) && m.type === 'video')
+  return video ? asRecord(video).duration : null
+}
+
+function videoIdOf(url: unknown): string {
+  const text = asString(url)
+  try {
+    return new URL(text).searchParams.get('v') ?? ''
+  } catch {
+    const match = text.match(/[?&]v=([^&#]+)/)
+    return match?.[1] ?? ''
+  }
 }
 
 export function mapWeiboItem(raw: unknown): Row {
@@ -228,6 +259,50 @@ export function mapTwitterComment(raw: unknown, url: string, floor: number): Row
   }
 }
 
+export function mapYoutubeItem(raw: unknown): Row {
+  const item = asRecord(raw)
+  const author = authorOf(raw)
+  const text = asString(item.text)
+  const id = asString(item.id)
+  const images = imagesOf(raw)
+  const cover = asString(item.cover) || images[0] || ''
+  const duration = firstVideoDuration(raw)
+  return {
+    标题: asString(item.title) || text.slice(0, 120),
+    正文: text,
+    作者: asString(author.name),
+    视频ID: id,
+    链接: asString(item.url) || (id ? `https://www.youtube.com/watch?v=${id}` : ''),
+    播放数: countOrBlank(stat(raw, 'views')),
+    点赞数: countOrBlank(stat(raw, 'likes')),
+    发布时间: localStamp(item.created_at),
+    时长: durationText(duration),
+    时长秒: countOrBlank(duration),
+    频道ID: asString(author.id),
+    图片链接: cover,
+  }
+}
+
+export function mapYoutubeComment(raw: unknown, url: string, floor: number): Row {
+  const author = authorOf(raw)
+  return {
+    平台: 'youtube',
+    文章URL: url,
+    评论者: textOrEmpty(author.name),
+    评论者主页: asString(author.url),
+    评论者ID: asString(author.id),
+    评论内容: textOrEmpty(asRecord(raw).text),
+    评论时间: localStamp(asRecord(raw).created_at),
+    点赞数: countOrBlank(stat(raw, 'likes')),
+    回复数: countOrBlank(stat(raw, 'replies')),
+    楼层: floor,
+    评论ID: idOrEmpty(asRecord(raw).id),
+    // 归一化 Comment 没有「作者回复」标记；留空而不是编造 0。
+    是否作者回复: '',
+    视频ID: videoIdOf(url),
+  }
+}
+
 function mapGenericItem(raw: unknown, platform: string): Row {
   const author = authorOf(raw)
   const images = imagesOf(raw)
@@ -365,6 +440,16 @@ export const PLATFORM_SPECS: Record<string, PlatformSpec> = {
     itemKey: keyById,
     expandReplies: true,
   },
+  youtube: {
+    platform: 'youtube',
+    catbus: 'youtube',
+    columns: { item: YOUTUBE_VIDEO_COLUMNS, comment: YOUTUBE_COMMENT_COLUMNS },
+    mapItem: mapYoutubeItem,
+    mapComment: mapYoutubeComment,
+    commands: { posts: 'item search', author: 'user items', comments: 'comment list', replies: 'comment replies' },
+    itemKey: keyById,
+    expandReplies: true,
+  },
 }
 
 export class NormalizedAdapter {
@@ -454,7 +539,8 @@ export class NormalizedAdapter {
         let floor = 0
         let articleRows = 0
         for (const root of roots) {
-          if (limit > 0 && rows.length >= limit) break
+          // comment_limit 是「每篇文章」的条数：第二篇文章不能因为第一篇已经写满而一条都不取。
+          if (limit > 0 && articleRows >= limit) break
           floor += 1
           await this.emit(rows, this.spec.mapComment(root, url, floor))
           articleRows += 1
@@ -464,12 +550,13 @@ export class NormalizedAdapter {
           // 上游的 comment list 只给根评论；子回复单独问一次。与 Selenium 版一样把回复接在父楼层之后，
           // 但绝不为了一条回复再开一篇文章的递归——回复的回复不在本模式的承诺里。
           try {
-            const remaining = limit > 0 ? limit - rows.length : 0
+            const remaining = limit > 0 ? limit - articleRows : 0
+            if (limit > 0 && remaining <= 0) continue
             const parentId = idOrEmpty(asRecord(root).id)
             if (!parentId) continue
             const childValue = await this.call(this.spec.commands.replies, [url, parentId], remaining > 0 ? remaining : 'all')
             for (const child of rowsOf(childValue)) {
-              if (limit > 0 && rows.length >= limit) break
+              if (limit > 0 && articleRows >= limit) break
               floor += 1
               await this.emit(rows, this.spec.mapComment(child, url, floor, parentId))
               articleRows += 1

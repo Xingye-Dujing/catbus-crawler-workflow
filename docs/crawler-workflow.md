@@ -8,6 +8,8 @@
 - 不可用或只完成一部分的组合必须带原因，不做自动回退，也不静默换榜单。
 - 输出列沿用采析绘现有契约。CatBus 拿不到的视频计数字段留空，不能写成 `0`；真实 `0` 仍然是 `0`。评论表的等级、点赞数、子回复数、回复数沿用 Selenium 的 `_as_int` 语义，缺失为 `0`。
 - 后端是节点指纹、去重账本和 cursor 的一部分。换后端等于重新采集，不能把 Selenium 的行和 CatBus 的行混成一个账本。
+- 清单里的 `auth` 取自注册表而不是写死：对不支持游客态的 web 端是 `required`；YouTube 的 web 端声明了 `guest: true`，搜索、作品详情、评论等模式是 `optional`，采析绘的运行门禁因此不会要求先登录。注册表显式要求登录的命令（推荐流、投稿管理、通知、历史）仍是 `required`。
+- `comment_limit` 是**每篇文章**的条数：多链接评论时第二篇不会因为第一篇写满而拿不到行。
 - CatBus 使用自己的账号文件，不复用 Selenium cookie。运行前先 `catbus bilibili auth login`，命令里用 `-a <CatBus 账号>` 或 `--account`。
 
 ## 2. 当前矩阵
@@ -23,6 +25,7 @@
 | X | CatBus 可用 | CatBus 可用 | 不可用：feed list 只有推荐流 | CatBus 可用（不展开楼中楼） |
 | 快手 | CatBus 部分（搜索无筛选） | CatBus 可用 | 不可用：feed list 是推荐流 | CatBus 部分（子回复只核对过一组参数） |
 | TikTok | CatBus 可用 | CatBus 可用 | 不可用：feed list 是推荐流 | CatBus 可用 |
+| YouTube | CatBus 可用 | CatBus 可用 | 不可用：feed list 只有推荐流和订阅流 | CatBus 可用（根评论 + 一层楼中楼） |
 | 京东 / 淘宝 / 闲鱼 | 无共享模式 | 无共享模式 | 无共享模式 | 无共享模式 |
 
 “不可用”是 CatBus 没有对应能力；“部分”是上游只支持一部分，原因写在清单的 `reason` 里；任何非 `available` 的组合都必须由上层展示原因，不能让用户选中后才发现。京东 / 淘宝 / 闲鱼的“商品”不是帖子，不套用 posts/author/hot/comments 语义，只用下面生成的独有模式（如 `item.search`、`comment.list`、`product.get`）。
@@ -135,7 +138,7 @@ CatBus 的归一化 `Item.stats` 只有播放/点赞/评论/收藏/转发，投�
 
 ## 6. 已知限制
 
-- 共享模式覆盖 B站、微博、小红书、抖音、X、快手、TikTok 的 28 个格子，其中 6 个按上游事实标为不可用（各平台热榜、微博热榜等）；抖音热榜按上游事实仍是不可用（`feed list --kind hot` 是 `NOT_IMPLEMENTED`），没有冒充。京东 / 淘宝 / 闲鱼只提供注册表里真实实现的读命令；知乎、微信、红果短剧与 CatBus 没有交集。YouTube 与 Discord 虽已接入 CatBus，但采析绘没有对应平台：Discord 走 `pc` 端（清单只生成 `web` 端模式），YouTube 不在平台映射里，因此都不出现在清单里。
+- 共享模式覆盖 B站、微博、小红书、抖音、X、快手、TikTok、YouTube 的 32 个格子，其中 7 个按上游事实标为不可用（各平台热榜、微博热榜等）；抖音热榜按上游事实仍是不可用（`feed list --kind hot` 是 `NOT_IMPLEMENTED`），没有冒充。京东 / 淘宝 / 闲鱼只提供注册表里真实实现的读命令；知乎、微信、红果短剧与 CatBus 没有交集。Discord 走 `pc` 端且采析绘没有对应平台（清单只生成 `web` 端模式），因此不出现在清单里；YouTube 已经有共享模式和独有模式，作品/评论列与采析绘 Selenium 版同序。
 - 微博搜索只有第一页、微博评论只有一级；快手搜索没有筛选；快手子回复只核对过一组抓包参数——都写进清单的 `reason`，由上层展示。
 - CatBus 独有模式按输出类型映射成通用列；它们不是 Selenium 表的替代，同一平台的两套模式喂给分析节点时列名不同是事实，不是错误。
 - B站 hot 只支持 popular；ranking 未接入 CatBus。
@@ -143,6 +146,14 @@ CatBus 的归一化 `Item.stats` 只有播放/点赞/评论/收藏/转发，投�
 - 适配器不维护 CatBus 侧的 cursor。一次 `run` 会尽量取到目标条数，详情失败记在 `warnings` / `status` 里；采析绘的去重账本负责跨运行去重，断点续传仍以采析绘自己的 cursor 为准。
 - `--raw` 的字段形状来自同步基线 `cv-cat/catbus` `419e030` 的上游接口。上游字段变化时先更新 CatBus 的移植和测试，再更新这里的映射。
 - CatBus 的 cookie 导入只认 `expirationDate` / `expires`，不认 Selenium 导出的 `expiry`；`httpOnly` / `sameSite` / `secure` 也不会保留。不要直接把 Selenium 的 cookie 文件喂给 CatBus。
+
+### 适配层测试
+
+`tests/crawler-workflow.test.ts` 覆盖映射、清单、逐行交出和错误收敛；`tests/crawler-workflow-contract.test.ts` 额外守住三件容易被升级打破的事：
+
+1. 清单的模式键与参数名都在采析绘的词表和字段模板里（否则面板画不出表单）；
+2. 每个模式声明的列与映射器实际产出的键**完全相同**——采析绘 Python 桥会逐列校验，多一列少一列都会按列漂移拒收整行；
+3. 适配器 CLI 的整条边界：`capabilities` / `preflight` / `run`，`--params -`（Python 桥实际用的 stdin 传参）、jsonl 逐行写、`-o json`、`--provenance`、退出码和摘要，都用假的 catbus 子进程跑过一遍。
 
 ## 7. 同步上游
 

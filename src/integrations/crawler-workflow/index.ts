@@ -20,6 +20,8 @@ export {
   mapWeiboItem,
   mapXhsComment,
   mapXhsItem,
+  mapYoutubeComment,
+  mapYoutubeItem,
   NormalizedAdapter,
   PLATFORM_SPECS,
 } from './normalized.js'

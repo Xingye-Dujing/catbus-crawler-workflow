@@ -13,6 +13,8 @@ import {
   WEIBO_POST_COLUMNS,
   XHS_COMMENT_COLUMNS,
   XHS_NOTE_COLUMNS,
+  YOUTUBE_COMMENT_COLUMNS,
+  YOUTUBE_VIDEO_COLUMNS,
 } from './columns.js'
 import { ARG_PARAMS, identityColumn } from './generic.js'
 import type { BackendManifest, CrawlerMode, ModeCapability, PlatformCapability } from './types.js'
@@ -77,6 +79,8 @@ const PLATFORM_IDS: Array<{ id: string; catbus: string }> = [
   { id: 'jd', catbus: 'jd' },
   { id: 'taobao', catbus: 'taobao' },
   { id: 'xianyu', catbus: 'xianyu' },
+  // 采析绘本来就有 YouTube 的 Selenium 采集器；CatBus 是它的第二个引擎。
+  { id: 'youtube', catbus: 'youtube' },
 ]
 
 /** 共享模式背后那条 CatBus 命令；生成独有模式时跳过它们，免得同一个命令出现两次。 */
@@ -91,6 +95,7 @@ const SHARED_COMMANDS: Record<string, string[]> = {
   jd: [],
   taobao: [],
   xianyu: [],
+  youtube: ['item search', 'user items', 'comment list'],
 }
 
 function sharedModes(id: string, columns: { item: string[]; comment: string[] }): Record<string, ModeCapability> {
@@ -349,6 +354,37 @@ function sharedModes(id: string, columns: { item: string[]; comment: string[] })
         }),
         hot: unavailable('CatBus 的 TikTok feed list 是推荐流，不是热榜。'),
       }
+    case 'youtube':
+      return {
+        posts: sharedMode({
+          status: 'available',
+          handler: 'posts',
+          command: 'item search',
+          columns: YOUTUBE_VIDEO_COLUMNS,
+          identity: ['视频ID'],
+          params: ['keyword', 'target_count', 'catbus_account'],
+          note: '列与采析绘 Selenium 版一致；游客态可读搜索，时长与频道 ID 取自归一化输出，接口没给的字段留空。',
+        }),
+        author: sharedMode({
+          status: 'available',
+          handler: 'author',
+          command: 'user items',
+          columns: YOUTUBE_VIDEO_COLUMNS,
+          identity: ['视频ID'],
+          params: ['author', 'target_count', 'catbus_account'],
+          note: '<author> 为频道 ID、@handle 或频道链接；列与搜索模式一致。',
+        }),
+        comments: sharedMode({
+          status: 'available',
+          handler: 'comments',
+          command: 'comment list',
+          columns: YOUTUBE_COMMENT_COLUMNS,
+          identity: ['平台', '评论ID'],
+          params: ['urls', 'comment_limit', 'catbus_account'],
+          note: '根评论 + 一层楼中楼（comment replies）；归一化输出没有「作者回复」标记，该列留空。',
+        }),
+        hot: unavailable('CatBus 的 YouTube feed list 只有推荐流和订阅流，没有热榜。'),
+      }
     default:
       // 电商平台没有「作品/作者/热榜/评论」这套 Selenium 语义：只出注册表里真实实现的读命令。
       return {}
@@ -412,15 +448,34 @@ function generatedModes(catbusId: string, sharedCommands: string[]): Record<stri
   return out
 }
 
+/**
+ * 登录要求跟着注册表走，不写死 required。
+ *
+ * 绝大多数平台的 web 端不支持游客态，注册表会把读命令一律改成 required；YouTube 的 web 端
+ * 声明了 guest: true，搜索、视频、评论等命令是 optional。采析绘的运行门禁读清单里的 auth，
+ * 硬写 required 会让本来能匿名采集的模式在面板上要求登录。
+ */
+function withRegistryAuth(catbus: string, modes: Record<string, ModeCapability>): Record<string, ModeCapability> {
+  const platform = findPlatform(catbus)
+  if (!platform || platform.endpoints.web === 'planned') return modes
+  const commands = platform.endpoints.web.commands
+  for (const mode of Object.values(modes)) {
+    if (!mode.command) continue
+    const command = commands.get(mode.command)
+    if (command) mode.auth = command.auth
+  }
+  return modes
+}
+
 /** 采析绘的平台 id 是 xiaohongshu / twitter，CatBus 是 xhs / x；清单以采析绘侧为准。 */
 export function manifest(): BackendManifest {
   const platforms: Record<string, PlatformCapability> = {}
   for (const { id, catbus } of PLATFORM_IDS) {
     const columns = columnsFor(id)
-    const modes = {
+    const modes = withRegistryAuth(catbus, {
       ...sharedModes(id, columns),
       ...generatedModes(catbus, SHARED_COMMANDS[id] ?? []),
-    }
+    })
     platforms[id] = { catbus_platform: catbus, label: labelOf(catbus), modes }
   }
   return {
@@ -453,6 +508,8 @@ function columnsFor(id: string): { item: string[]; comment: string[] } {
       return { item: DOUYIN_VIDEO_COLUMNS, comment: DOUYIN_COMMENT_COLUMNS }
     case 'twitter':
       return { item: TWITTER_POST_COLUMNS, comment: TWITTER_COMMENT_COLUMNS }
+    case 'youtube':
+      return { item: YOUTUBE_VIDEO_COLUMNS, comment: YOUTUBE_COMMENT_COLUMNS }
     default:
       return { item: ITEM_COLUMNS, comment: COMMENT_COLUMNS }
   }
@@ -478,6 +535,8 @@ export const PLATFORM_ALIASES: Record<string, string> = {
   ks: 'kuaishou',
   tiktok: 'tiktok',
   tt: 'tiktok',
+  youtube: 'youtube',
+  yt: 'youtube',
   jd: 'jd',
   taobao: 'taobao',
   xianyu: 'xianyu',

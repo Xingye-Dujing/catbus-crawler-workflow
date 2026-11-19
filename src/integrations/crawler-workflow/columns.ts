@@ -171,6 +171,41 @@ export const TWITTER_COMMENT_COLUMNS = [
   '推文ID',
 ]
 
+// ─── YouTube：与采析绘 Selenium 版同列 ────────────────────────────────────
+
+/** 采析绘 YouTube 作品表的列顺序（backend/crawlers/platforms/youtube/crawler.py）。 */
+export const YOUTUBE_VIDEO_COLUMNS = [
+  '标题',
+  '正文',
+  '作者',
+  '视频ID',
+  '链接',
+  '播放数',
+  '点赞数',
+  '发布时间',
+  '时长',
+  '时长秒',
+  '频道ID',
+  '图片链接',
+]
+
+/** 采析绘 YouTube 评论表的列顺序（backend/crawlers/platforms/youtube/comments.py）。 */
+export const YOUTUBE_COMMENT_COLUMNS = [
+  '平台',
+  '文章URL',
+  '评论者',
+  '评论者主页',
+  '评论者ID',
+  '评论内容',
+  '评论时间',
+  '点赞数',
+  '回复数',
+  '楼层',
+  '评论ID',
+  '是否作者回复',
+  '视频ID',
+]
+
 /** 归一化输出类型 → 通用列。清单生成与通用处理器都读这一份。 */
 export const OUTPUT_COLUMNS: Record<string, string[]> = {
   Item: ITEM_COLUMNS,
