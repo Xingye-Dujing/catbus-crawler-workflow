@@ -16,7 +16,7 @@
   - `npm run build && node dist/integrations/crawler-workflow/cli.js capabilities` 查看 平台 × 模式 矩阵；`run` / `preflight` 的用法与输出契约见 `docs/crawler-workflow.md`。
   - `npm run audit:mutating`（先 build）是硬门槛：以写动作结尾的命令必须带 `mutating` 或 `confirm`，且适配器清单里不能出现写命令。新增写命令用 `write()` 声明，手写扩展时别漏标。
   - 适配器只把 CatBus 的 JSON 映射成采析绘表格行，**不修改 `crawler_workflow` 仓库**，边界是子进程 + JSONL；独立只读模式由注册表自动生成，不要手维护名单。
-- 同步上游：`npm run sync:upstream -- --crawler-workflow <采析绘目录> [--push]`。脚本用 `gh run list` 找**最新一个上游 CI 全绿**的 `upstream/master` 提交，`git merge --no-commit` 后依次 `npm ci` → build → test → `audit-mutating`（可选采析绘集成测试），任一步失败自动 `git merge --abort`；冲突不自动解决，按 `docs/crawler-workflow.md` 人工处理后重跑。上游 CI 整体故障时（如 2026-11-16 起 master 的 ci/docker 全部秒级失败）脚本会停在旧基线，此时经确认可人工指定目标提交（本次为 WebUI 合并前的 `419e030`），但本地完整验证与 `audit-mutating` 一道不能少；新写命令必须补 `mutating: true`，采析绘清单里不许出现写命令。
+- 同步上游：`npm run sync:upstream -- --crawler-workflow <采析绘目录> [--push]`。脚本取**最新一个上游 CI 全绿**的 `upstream/master` 提交，`git merge --no-commit` 后依次 `npm ci` → build → test → `audit-mutating`（可选采析绘集成测试），任一步失败自动 `git merge --abort`。CI 整体故障时脚本会停在旧基线，此时须人工确认目标提交（优先大改动合并前、能跑通完整验证的版本），把原因写进提交信息；冲突人工处理，新写命令补 `mutating: true`。CI 判定、冲突处理与验证清单的操作手册见 `docs/crawler-workflow.md` 第 7 节。
 - 便携包：`node scripts/package-portable.mjs --platform <darwin-arm64|darwin-x64|win32-x64>`（先 build + `assets:*`）。macOS 发行由 `.github/workflows/release-macos.yml` 构建并按 90 MiB 分卷发到 Gitee Release，需要 secret `GITEE_ACCESS_TOKEN`；细节见 `docs/crawler-workflow.md` 第 8 节。
 - 平台实现样板是 `src/platforms/bilibili/web/`（`client.ts` / `api.ts` / `commands.ts` / `normalize.ts` / `resolve.ts`）；请求构造与签名必须有对拍测试（7.5）。
 - `.claude/skills/catbus/` 是 Agent 技能的唯一权威副本（`tests/skill.test.ts` 只校验它）；`.agents/skills/catbus/` 是旧的镜像，已缺 12306 / jimeng / maoyan / mteam，改技能时以 `.claude/` 为准。

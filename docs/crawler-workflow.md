@@ -135,32 +135,70 @@ CatBus 的归一化 `Item.stats` 只有播放/点赞/评论/收藏/转发，投�
 
 ## 6. 已知限制
 
-- 共享模式覆盖 B站、微博、小红书、抖音、X、快手、TikTok 的 28 个格子，其中 6 个按上游事实标为不可用（各平台热榜、微博热榜等）；抖音热榜按上游事实仍是不可用（`feed list --kind hot` 是 `NOT_IMPLEMENTED`），没有冒充。京东 / 淘宝 / 闲鱼只提供注册表里真实实现的读命令；知乎、微信、红果短剧、YouTube 与 CatBus 没有交集，不出现在清单里。
+- 共享模式覆盖 B站、微博、小红书、抖音、X、快手、TikTok 的 28 个格子，其中 6 个按上游事实标为不可用（各平台热榜、微博热榜等）；抖音热榜按上游事实仍是不可用（`feed list --kind hot` 是 `NOT_IMPLEMENTED`），没有冒充。京东 / 淘宝 / 闲鱼只提供注册表里真实实现的读命令；知乎、微信、红果短剧与 CatBus 没有交集。YouTube 与 Discord 虽已接入 CatBus，但采析绘没有对应平台：Discord 走 `pc` 端（清单只生成 `web` 端模式），YouTube 不在平台映射里，因此都不出现在清单里。
 - 微博搜索只有第一页、微博评论只有一级；快手搜索没有筛选；快手子回复只核对过一组抓包参数——都写进清单的 `reason`，由上层展示。
 - CatBus 独有模式按输出类型映射成通用列；它们不是 Selenium 表的替代，同一平台的两套模式喂给分析节点时列名不同是事实，不是错误。
 - B站 hot 只支持 popular；ranking 未接入 CatBus。
 - 微博没有 CatBus 热榜；微博搜索只有第一页；微博评论只有一级。
 - 适配器不维护 CatBus 侧的 cursor。一次 `run` 会尽量取到目标条数，详情失败记在 `warnings` / `status` 里；采析绘的去重账本负责跨运行去重，断点续传仍以采析绘自己的 cursor 为准。
-- `--raw` 的字段形状来自同步基线 `cv-cat/catbus` `419e030`（WebUI 合并前，上游自 2026-11-16 起 master 的 CI 基础设施故障，见第 7 节）的上游接口；更早期基线是 0.3.0 的 `87dfce4`（CI 全绿）。上游字段变化时先更新 CatBus 的移植和测试，再更新这里的映射。
+- `--raw` 的字段形状来自同步基线 `cv-cat/catbus` `419e030` 的上游接口。上游字段变化时先更新 CatBus 的移植和测试，再更新这里的映射。
 - CatBus 的 cookie 导入只认 `expirationDate` / `expires`，不认 Selenium 导出的 `expiry`；`httpOnly` / `sameSite` / `secure` 也不会保留。不要直接把 Selenium 的 cookie 文件喂给 CatBus。
 
 ## 7. 同步上游
 
-本仓库是 [`cv-cat/catbus`](https://github.com/cv-cat/catbus) 的分支，`master` 同时保留上游历史与采析绘适配提交。同步只做一件事：把上游**最新一个 CI 全绿**的提交合进来，再验证适配。
+本仓库是 [`cv-cat/catbus`](https://github.com/cv-cat/catbus) 的分支，`master` 同时保留上游历史与采析绘适配提交。同步的原则：取上游**最新一个 CI 全绿**的提交合进来，再验证适配；CI 不可信时人工定目标，但验证门槛不降。
 
 ```bash
 npm run sync:upstream -- --crawler-workflow <采析绘仓库目录>          # 合并并验证，不推送
 npm run sync:upstream -- --crawler-workflow <采析绘仓库目录> --push   # 验证通过后推 origin
 ```
 
+### 脚本规则与 CI 判定
+
 脚本（`scripts/sync-upstream.mjs`）的规则：
 
-1. `git fetch upstream` 后从 `upstream/master` 由新到旧找提交；用 `gh run list` 看该提交的**每一条** workflow——有失败、取消或还在跑的都跳过，取最新的全部完成且没有失败的版本。截至 0.3.0 同步时，`ee20285`（YouTube）CI 是红的，因此停在 `87dfce4`（0.3.0）。本次同步时上游自 2026-11-16 起 master 的 `ci` / `docker` 全部约 2 秒失败且无步骤（基础设施故障），最后一个「全绿且仍在历史里」的提交仍是 `87dfce4`；经人工确认后取 WebUI 合并前的 `419e030`，跳过 WebUI 大改动，并靠本地完整验证与采析绘集成测试把关。脚本的 `latestGreen` 规则不变，CI 恢复后仍按规则自动取最新全绿提交。
+1. `git fetch upstream` 后从 `upstream/master` 由新到旧找提交；用 `gh run list` 看该提交的**每一条** workflow——有失败、取消或还在跑的都跳过，取最新的全部完成且至少有一条真的跑过（不全是 skipped）的版本。
 2. `git merge --no-commit` 合并，然后 `npm ci` → `npm run build` → `npm test` → `node scripts/audit-mutating.mjs`；给了 `--crawler-workflow` 时还会用 `CATBUS_HOME=<本仓库>` 跑采析绘的 `tests/integration/test_catbus_adapter.py`。
 3. 任何一步失败就 `git merge --abort`，不留下坏提交；全部通过才提交，`--push` 才推送。
-4. 冲突不自动解决：脚本会停下并保留冲突现场，按 `docs/crawler-workflow.md` 的平台映射与 `mutating` 约定人工处理后重跑。
 
-**写命令体检**是同步的硬门槛：`scripts/audit-mutating.mjs` 会找出所有以写动作结尾、却既没有 `mutating` 也没有 `confirm` 的平台命令，并检查适配器清单里没有写命令。上游新增的写命令必须补 `mutating: true`，否则它会作为“读模式”出现在采析绘面板上。
+注意 `gh run list --commit` 要用 `git log --format=%H` 给出的**完整 SHA**，短 SHA 查不到记录；`gh` 没登录或仓库 CI 记录过期时也要先确认，否则会把本来全绿的提交误判成「没有 CI 记录」。
+
+**CI 整体故障的识别与处理**：从最新提交往回看，如果全都因为同一类现象失败——`ci` / `docker` 等每条 workflow 在几秒内结束、状态已完成但结论是 failure、作业里没有执行步骤——那是 CI 基础设施故障，不是代码问题。此时脚本会停在旧基线（找不到全绿提交），需要人工确认目标提交：
+
+- 优先选**大改动合并之前**的最后一个提交，跳过难以在本分支验证的全新子系统（例如 WebUI），先把成熟的上游功能同步进来；
+- 目标提交必须能跑通下面「验证清单」的全部项目；
+- 在提交信息里写明目标 commit、为什么跳过更高的提交，以及 CI 故障的现象；
+- CI 恢复后回到脚本的自动规则，取最新全绿提交。
+
+### 合并冲突处理
+
+冲突不自动解决：脚本会停下并保留冲突现场，在 `git status` 里看 `UU` 文件。冲突集中在几类文件，处理方式是**先取上游版本，再把适配分支的东西加回去**：
+
+- `package.json`：保留上游新增脚本，加回 `sync:upstream`、`audit:mutating`、`package:portable`（与上游的 `gen:assets` 并存）；
+- `README.md`：保留上游正文，加回本仓库的采析绘适配分支说明与文档链接；
+- `CHANGELOG.md`：完整保留上游 Unreleased 的 Added / Changed / Fixed，把本分支的同步说明并入 Changed，不互相覆盖；
+- `src/platforms/<p>/index.ts`：上游常把手写扩展命令的 `mutating` 漏掉，取上游版本后按下一节逐一补标。
+
+处理完用 `git add` 标记已解决，再跑验证清单；不要带着未解决的冲突提交。
+
+### 写命令体检（硬门槛）
+
+`scripts/audit-mutating.mjs` 找出所有以写动作结尾、却既没有 `mutating` 也没有 `confirm` 的平台命令，并检查适配器清单里没有写命令。`impl()` / `extension()` 这类 helper 会把额外的声明字段透传，所以在命令声明里补 `mutating: true` 即可。漏标的后果是它会作为「读模式」出现在采析绘面板上，用户点一下就会改动账号状态。
+
+体检按脚本里的动词表（`WRITE_VERBS`）检查，不在表里的状态变更命令（如 `friend accept`、`msg read`）不会被它报出来；新平台接入时按「是否会改平台状态」自行判断，不要只依赖体检结果。适配器清单（`manifest()`）按 `mutating` / `stream` / `confirm` 机械排除，`msg *` 整组排除。
+
+### 验证清单
+
+目标提交定下来之后按顺序全跑一遍，任何一步失败就 `git merge --abort`：
+
+1. `npm ci`
+2. `npm run build` 与 `npm run typecheck`
+3. `npm test`
+4. `node scripts/audit-mutating.mjs`
+5. `npm run gen:capabilities`，确认 `docs/capabilities.md` 已更新且测试仍通过
+6. 采析绘集成测试：在采析绘仓库目录用 `.venv` 的 python 跑 `tests/integration/test_catbus_adapter.py -q -m integration`，环境变量 `CATBUS_HOME=<本仓库>`、`CIXI_REQUIRE_CATBUS=1`、`PYTHONIOENCODING=utf-8`
+
+TUI 的扫码登录用例在并行负载下有偶发超时（屏幕停在「已扫码，请在手机上确认」），单独运行或重跑即可确认；遇到时先判断是不是这类时序抖动，不要急着回滚代码。
 
 ## 8. 便携包与 Gitee 镜像
 

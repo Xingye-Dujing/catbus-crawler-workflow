@@ -44,8 +44,8 @@
 
 ### Changed
 
-- 同步上游 `cv-cat/catbus`：先同步 `87dfce4`（0.3.0，`ci` / `docker` 全绿），本次再同步到 `419e030`（WebUI 合并前的最后一个提交）。上游自 2026-11-16 起 master 的 `ci` / `docker` 全部约 2 秒即失败且无步骤，最后一个「CI 全绿且仍在历史里」的提交就是 `87dfce4`，因此经人工确认后跳过 WebUI 大改动、取 `419e030`，并在本地跑完整 `npm ci` → build → test → `audit:mutating` → 采析绘集成测试后才提交
-- 采析绘适配跟着上游新写命令补齐 `mutating: true`：bilibili `item edit`、`item coin`、`item triple`、`comment pin` / `comment unpin`，以及 `series add` / `series sort` 和 0.2.1 就漏标的 tiktok `folder add`（原先会被当成读命令暴露）；`manifest()` 继续按 `mutating` / `stream` / `confirm` 机械排除写命令，`audit:mutating` 仍是同步硬门槛
+- 同步上游至 `cv-cat/catbus` `419e030`（WebUI 合并前）：新增 YouTube / Discord 平台、TUI、热搜榜、下载导出等能力；CI 故障期间的人工定标与验证流程见 `docs/crawler-workflow.md` 第 7 节
+- 采析绘适配：上游新增写命令补齐 `mutating: true`（bilibili、youtube、discord），清单继续机械排除写命令，`audit:mutating` 保持为同步硬门槛
 - 内部：`src/cli/exec.ts` 提供进程内运行命令的 `prepare` / `invoke`，按 `runPlatform` 的顺序调用 `dispatch.ts` 里同一批校验、身份解析、凭证落盘函数，TUI 只经它运行命令；`dispatch.ts` 里这几个函数改为导出，`--auto-bind` 的检查和 `auth status` 的回写各抽成一个函数，CLI 行为不变。`tests/exec.test.ts` 检查两条路径结果一致
 
 ### Fixed
