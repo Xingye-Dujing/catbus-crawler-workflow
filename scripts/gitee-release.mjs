@@ -76,7 +76,8 @@ const found = await api(`/repos/${owner}/${repo}/releases/tags/${encodeURICompon
 if (found.res.ok && found.body?.id) {
   release = found.body
   console.log(`[gitee] 找到 Release ${tag}（id ${release.id}）`)
-} else if (found.res.status === 404) {
+} else if (found.res.status === 404 || (found.res.ok && !found.body?.id)) {
+  // Gitee 的「tag 不存在」是 HTTP 200 + JSON null，不是 404；新 tag 第一次发布必须走这里。
   console.log(`[gitee] Release ${tag} 不存在，创建`)
   const created = await api(`/repos/${owner}/${repo}/releases`, {
     method: 'POST',
